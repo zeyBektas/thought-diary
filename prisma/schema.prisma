@@ -1,0 +1,272 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum RoleCode {
+  ADMIN
+  CLIENT
+  COUNSELOR
+}
+
+enum CareRelationshipStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+  REVOKED
+}
+
+enum JournalEntryType {
+  THOUGHT_RECORD
+  PANIC_LOG
+  GRATITUDE
+  MOOD_CHECK
+  FREE_JOURNAL
+}
+
+enum JournalVisibility {
+  PRIVATE
+  COUNSELOR
+  ORGANIZATION
+  PUBLIC
+}
+
+
+model Role {
+  id        String   @id @default(uuid())
+
+  code      RoleCode @unique
+
+  users     User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@map("roles")
+}
+
+model Emotion {
+
+  id        String @id @default(uuid())
+
+  code      String @unique
+
+  parentId  String?
+
+  parent   Emotion?  @relation("EmotionTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Emotion[] @relation("EmotionTree")
+
+  journals Journal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@index([parentId])
+
+  @@map("emotions")
+}
+
+model Organization {
+
+  id          String @id @default(uuid())
+
+  name        String @unique
+
+  description String?
+  website     String?
+  logoUrl     String?
+
+  users       User[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@map("organizations")
+}
+
+model User {
+  id                  String      @id @default(uuid())
+
+  email               String      @unique
+  passwordHash        String
+
+  username String? @unique
+  firstName           String
+  lastName            String
+
+  phone               String?
+  bio                 String?
+  profileImageUrl     String?
+
+  preferredLanguage   String      @default("en")
+
+  status              UserStatus  @default(ACTIVE)
+
+  emailVerifiedAt     DateTime?
+  lastLoginAt         DateTime?
+
+  roleId              String
+  role                Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  organizationId      String?
+  organization        Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  deletedAt           DateTime?
+
+  counselorRelationships CareRelationship[] @relation("CounselorRelationships")
+
+  clientRelationships CareRelationship[] @relation("ClientRelationships")
+
+  journals Journal[]
+
+  refreshTokens RefreshToken[]
+
+  counselorNotesWritten CounselorNote[] @relation("WrittenNotes")
+
+  counselorNotesReceived CounselorNote[] @relation("ReceivedNotes")
+
+  @@index([roleId])
+  @@index([organizationId])
+  @@index([status])
+
+  @@map("users")
+}
+
+model CareRelationship {
+  id String @id @default(uuid())
+
+  counselorId String
+  counselor User @relation("CounselorRelationships", fields: [counselorId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client User @relation("ClientRelationships", fields: [clientId], references: [id], onDelete: Cascade)
+
+  status CareRelationshipStatus @default(PENDING)
+
+  requestedAt DateTime @default(now())
+  respondedAt DateTime?
+  endedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@unique([counselorId, clientId])
+
+  @@index([counselorId])
+  @@index([clientId])
+  @@index([status])
+
+  @@map("care_relationships")
+}
+
+model RefreshToken {
+
+  id String @id @default(uuid())
+
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String @unique
+
+  expiresAt DateTime
+
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@index([userId])
+
+  @@index([expiresAt])
+
+  @@map("refresh_tokens")
+}
+
+model Journal {
+
+  id String @id @default(uuid())
+
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  entryType JournalEntryType
+
+  primaryEmotionId String?
+  primaryEmotion Emotion? @relation(fields: [primaryEmotionId], references: [id], onDelete: SetNull)
+
+  intensityBefore Int?
+
+  intensityAfter Int?
+
+  visibility JournalVisibility @default(PRIVATE)
+
+  content Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  counselorNotes CounselorNote[]
+
+  @@index([userId])
+
+  @@index([primaryEmotionId])
+
+  @@index([entryType])
+
+  @@index([createdAt])
+
+  @@map("journals")
+}
+
+model CounselorNote {
+
+  id String @id @default(uuid())
+
+  counselorId String
+  counselor User @relation("WrittenNotes", fields: [counselorId], references: [id], onDelete: Cascade)
+
+  clientId String
+  client User @relation("ReceivedNotes", fields: [clientId], references: [id], onDelete: Cascade)
+
+  journalId String?
+  journal Journal? @relation(fields: [journalId], references: [id], onDelete: SetNull)
+
+  note String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@index([counselorId])
+
+  @@index([clientId])
+
+  @@index([journalId])
+
+  @@index([createdAt])
+
+  @@map("counselor_notes")
+}
