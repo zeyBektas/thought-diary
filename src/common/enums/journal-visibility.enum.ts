@@ -1,0 +1,6 @@
+export enum JournalVisibility {
+  PRIVATE = 'PRIVATE',
+  COUNSELOR = 'COUNSELOR',
+  ORGANIZATION = 'ORGANIZATION',
+  PUBLIC = 'PUBLIC',
+}
