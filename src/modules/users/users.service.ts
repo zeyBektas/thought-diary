@@ -1,26 +1,63 @@
-import { Injectable } from '@nestjs/common';
-import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { PrismaService } from '@/core/prisma/prisma.service';
+import { ConflictException, Injectable } from '@nestjs/common';
 
 @Injectable()
 export class UsersService {
-  create(createUserDto: CreateUserDto) {
-    return 'This action adds a new user';
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findByEmail(email: string) {
+    return this.prisma.user.findUnique({
+      where: {
+        email: email.toLowerCase(),
+      },
+      include: {
+        role: true,
+        organization: true,
+      },
+    });
   }
 
-  findAll() {
-    return `This action returns all users`;
+  async findById(id: string) {
+    return this.prisma.user.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        role: true,
+        organization: true,
+      },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} user`;
-  }
+  async create(data: {
+    email: string;
+    passwordHash: string;
+    firstName: string;
+    lastName: string;
+    username?: string;
+    phone?: string;
+    roleId: string;
+  }) {
+    const existingUser = await this.findByEmail(data.email);
 
-  update(id: number, updateUserDto: UpdateUserDto) {
-    return `This action updates a #${id} user`;
-  }
+    if (existingUser) {
+      throw new ConflictException('Email is already registered');
+    }
 
-  remove(id: number) {
-    return `This action removes a #${id} user`;
+    return this.prisma.user.create({
+      data: {
+        email: data.email.toLowerCase(),
+        passwordHash: data.passwordHash,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        username: data.username,
+        phone: data.phone,
+        roleId: data.roleId,
+      },
+      include: {
+        role: true,
+        organization: true,
+      },
+    });
   }
 }
