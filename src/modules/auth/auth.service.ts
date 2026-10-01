@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 
 import { UsersService } from '../users/users.service';
+import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RoleCode } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
@@ -65,7 +66,38 @@ export class AuthService {
     };
   }
 
-  private async generateTokens(user: any) {
+  async login(loginDto: LoginDto) {
+    const email = loginDto.email.trim().toLowerCase();
+    const user = await this.usersService.findByEmail(email);
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      user.passwordHash,
+    );
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User is not active');
+    }
+
+    const tokens = await this.generateTokens(user);
+
+    return {
+      user: this.getSafeUser(user),
+      ...tokens,
+    };
+  }
+
+  private async generateTokens(
+    user: Awaited<ReturnType<UsersService['create']>>,
+  ) {
     const accessToken = await this.jwtService.signAsync({
       sub: user.id,
       email: user.email,
@@ -192,7 +224,7 @@ export class AuthService {
     };
   }
 
-  private getSafeUser(user: any) {
+  private getSafeUser(user: Awaited<ReturnType<UsersService['create']>>) {
     return {
       id: user.id,
       email: user.email,

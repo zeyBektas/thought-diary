@@ -1,42 +1,64 @@
 import {
-  Controller,
-  Get,
-  Post,
   Body,
+  Controller,
+  Delete,
+  Get,
   Patch,
   Param,
-  Delete,
+  Post,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { DiariesService } from './diaries.service';
 import { CreateDiaryDto } from './dto/create-diary.dto';
 import { UpdateDiaryDto } from './dto/update-diary.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('diaries')
+@UseGuards(JwtAuthGuard)
 export class DiariesController {
   constructor(private readonly diariesService: DiariesService) {}
 
   @Post()
-  create(@Body() createDiaryDto: CreateDiaryDto) {
-    return this.diariesService.create(createDiaryDto);
+  create(
+    @Req() request: Request & { user: { userId: string } },
+    @Body() createDiaryDto: CreateDiaryDto,
+  ) {
+    return this.diariesService.create(request.user.userId, createDiaryDto);
   }
 
   @Get()
-  findAll() {
-    return this.diariesService.findAll();
+  findAll(@Req() request: Request & { user: { userId: string } }) {
+    return this.diariesService.findAll(request.user.userId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.diariesService.findOne(+id);
+  findOne(
+    @Req() request: Request & { user: { userId: string } },
+    @Param('id') id: string,
+  ) {
+    return this.diariesService.findOne(request.user.userId, id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDiaryDto: UpdateDiaryDto) {
-    return this.diariesService.update(+id, updateDiaryDto);
+  update(
+    @Req() request: Request & { user: { userId: string } },
+    @Param('id') id: string,
+    @Body() updateDiaryDto: UpdateDiaryDto,
+  ) {
+    return this.diariesService.update(
+      request.user.userId,
+      id,
+      updateDiaryDto,
+    );
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.diariesService.remove(+id);
+  remove(
+    @Req() request: Request & { user: { userId: string } },
+    @Param('id') id: string,
+  ) {
+    return this.diariesService.remove(request.user.userId, id);
   }
 }
