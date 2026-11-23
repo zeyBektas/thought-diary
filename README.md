@@ -100,3 +100,28 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 ## Generate Module
 
 nest g module ...
+
+## Provision a Counselor
+
+## Isolated Integration Tests
+
+With Docker running, unset any inherited `DATABASE_URL` and production `NODE_ENV`, then run `npm run test:integration`. The command creates a uniquely named disposable PostgreSQL container with random credentials, verifies its identity and loopback endpoint, applies the existing migrations, runs the isolated suites serially, and removes only that container. It does not use the development database or seed scripts. If interrupted, the command reports the exact container for deliberate cleanup; do not remove unrelated containers or volumes. Tests use a temporary working directory instead of the project `.env`.
+
+Public registration always creates a `CLIENT` account. Counselor accounts must be provisioned explicitly by a trusted operator with the standalone command below; this command is not part of normal startup, migrations, or deployment.
+
+Required runtime variables are `COUNSELOR_EMAIL`, `COUNSELOR_PASSWORD`, `COUNSELOR_FIRST_NAME`, and `COUNSELOR_LAST_NAME`. Optional variables are `COUNSELOR_USERNAME` and `COUNSELOR_PHONE`. Supply the password through a non-echoing local prompt or a secret manager; do not put it in command arguments, source control, or logs.
+
+### Local Integration Testing
+
+Start PostgreSQL, apply the existing migrations, and run the standard Prisma seed so the `COUNSELOR` role exists. Set the required variables only in the local command environment, run the command from the backend project directory, and clear the password variable afterward:
+
+```bash
+npm run provision:counselor
+unset COUNSELOR_PASSWORD
+```
+
+### Production Provisioning
+
+An authorized operator should run this as a separate, one-off operation with production database access and credentials injected from the deployment secret manager. Run it only after the normal migrations and role seed; do not add it to application startup, routine deployment automation, or the standard seed command.
+
+The command requires the existing `COUNSELOR` role, creates a counselor using the same password hashing convention as registration, and does not change an existing account. An existing counselor is reported as already provisioned; an email belonging to another role fails safely.

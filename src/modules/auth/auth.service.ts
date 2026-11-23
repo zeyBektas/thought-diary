@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { BCRYPT_HASH_ROUNDS } from './auth.constants';
 import { RoleCode } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
 
@@ -45,7 +46,10 @@ export class AuthService {
     }
 
     // Hash password
-    const passwordHash = await bcrypt.hash(registerDto.password, 12);
+    const passwordHash = await bcrypt.hash(
+      registerDto.password,
+      BCRYPT_HASH_ROUNDS,
+    );
 
     // Create user
     const user = await this.usersService.create({
@@ -98,6 +102,14 @@ export class AuthService {
   private async generateTokens(
     user: Awaited<ReturnType<UsersService['create']>>,
   ) {
+    const { tokens, data } = await this.prepareTokens(user);
+    await this.prisma.refreshToken.create({ data });
+    return tokens;
+  }
+
+  private async prepareTokens(
+    user: Awaited<ReturnType<UsersService['create']>>,
+  ) {
     const accessToken = await this.jwtService.signAsync({
       sub: user.id,
       email: user.email,
@@ -118,20 +130,16 @@ export class AuthService {
       },
     );
 
-    const tokenHash = await bcrypt.hash(refreshToken, 12);
+    const tokenHash = await bcrypt.hash(refreshToken, BCRYPT_HASH_ROUNDS);
 
-    await this.prisma.refreshToken.create({
+    return {
       data: {
         id: tokenId,
         userId: user.id,
         tokenHash,
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       },
-    });
-
-    return {
-      accessToken,
-      refreshToken,
+      tokens: { accessToken, refreshToken },
     };
   }
 
@@ -182,16 +190,24 @@ export class AuthService {
       throw new UnauthorizedException('User is not active');
     }
 
-    await this.prisma.refreshToken.update({
-      where: {
-        id: storedToken.id,
-      },
-      data: {
-        revokedAt: new Date(),
-      },
+    const { tokens, data } = await this.prepareTokens(user);
+    await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const consumed = await tx.refreshToken.updateMany({
+        where: {
+          id: storedToken.id,
+          userId: payload.sub,
+          revokedAt: null,
+          deletedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { revokedAt: now },
+      });
+      if (consumed.count !== 1) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+      await tx.refreshToken.create({ data });
     });
-
-    const tokens = await this.generateTokens(user);
 
     return tokens;
   }

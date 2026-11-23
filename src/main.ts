@@ -5,6 +5,10 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  app.enableCors({
+    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -15,4 +19,7 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 5000);
 }
-bootstrap();
+bootstrap().catch((error: unknown) => {
+  console.error('Application startup failed:', error);
+  process.exit(1);
+});

@@ -1,0 +1,1 @@
+ALTER TABLE "journals" ADD COLUMN "shareRevision" INTEGER NOT NULL DEFAULT 0;

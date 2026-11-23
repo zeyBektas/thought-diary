@@ -6,6 +6,9 @@ import {
   IsObject,
   IsOptional,
   IsUUID,
+  IsArray,
+  ArrayUnique,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateDiaryDto {
@@ -31,4 +34,10 @@ export class CreateDiaryDto {
   @IsOptional()
   @IsEnum(JournalVisibility)
   visibility?: JournalVisibility;
+
+  @ValidateIf((_object, value: unknown) => value !== undefined)
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  recipientRelationshipIds?: string[];
 }

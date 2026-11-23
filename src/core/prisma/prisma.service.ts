@@ -28,11 +28,52 @@ export class PrismaService
   }
 
   async onModuleInit() {
-    await this.$connect();
+    try {
+      await this.$connect();
+    } catch (error) {
+      try {
+        await this.closeConnections();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Prisma initialization and cleanup failed.',
+        );
+      }
+
+      throw error;
+    }
   }
 
   async onModuleDestroy() {
-    await this.$disconnect();
-    await this.pool.end();
+    await this.closeConnections();
+  }
+
+  private async closeConnections() {
+    let disconnectError: unknown;
+
+    try {
+      await this.$disconnect();
+    } catch (error) {
+      disconnectError = error;
+    }
+
+    try {
+      await this.pool.end();
+    } catch (poolError) {
+      if (disconnectError) {
+        throw new AggregateError(
+          [disconnectError, poolError],
+          'Failed to close Prisma connections.',
+        );
+      }
+      throw poolError;
+    }
+
+    if (disconnectError) {
+      throw new AggregateError(
+        [disconnectError],
+        'Failed to disconnect Prisma client.',
+      );
+    }
   }
 }

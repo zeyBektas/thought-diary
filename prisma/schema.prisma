@@ -93,8 +93,9 @@ model CareRelationship {
   deletedAt   DateTime?
   client      User                   @relation("ClientRelationships", fields: [clientId], references: [id], onDelete: Cascade)
   counselor   User                   @relation("CounselorRelationships", fields: [counselorId], references: [id], onDelete: Cascade)
+  journalShares JournalShare[]
 
-  @@unique([counselorId, clientId])
+  // Non-revoked pair uniqueness is enforced by a partial index in migration SQL.
   @@index([counselorId])
   @@index([clientId])
   @@index([status])
@@ -125,11 +126,13 @@ model Journal {
   intensityBefore  Int?
   intensityAfter   Int?
   visibility       JournalVisibility @default(PRIVATE)
+  shareRevision    Int               @default(0)
   content          Json              @default("{}")
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   deletedAt        DateTime?
   counselorNotes   CounselorNote[]
+  shares           JournalShare[]
   primaryEmotion   Emotion?          @relation(fields: [primaryEmotionId], references: [id])
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -138,6 +141,19 @@ model Journal {
   @@index([entryType])
   @@index([createdAt])
   @@map("journals")
+}
+
+model JournalShare {
+  id             String           @id @default(uuid())
+  journalId      String
+  relationshipId String
+  createdAt      DateTime         @default(now())
+  journal        Journal          @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  relationship   CareRelationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
+
+  @@unique([journalId, relationshipId])
+  @@index([relationshipId, journalId])
+  @@map("journal_shares")
 }
 
 model CounselorNote {

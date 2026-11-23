@@ -33,6 +33,11 @@ export class RelationshipsController {
     return this.relationshipsService.findMine(request.user.userId);
   }
 
+  @Get('shareable-counselors')
+  shareableCounselors(@Req() request: Request & { user: { userId: string } }) {
+    return this.relationshipsService.shareableCounselors(request.user.userId);
+  }
+
   @Patch(':id')
   respond(
     @Req() request: Request & { user: { userId: string } },

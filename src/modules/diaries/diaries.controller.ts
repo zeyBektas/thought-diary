@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Post,
+  Put,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import { DiariesService } from './diaries.service';
 import { CreateDiaryDto } from './dto/create-diary.dto';
 import { UpdateDiaryDto } from './dto/update-diary.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ReplaceSharesDto } from './dto/replace-shares.dto';
 
 @Controller('diaries')
 @UseGuards(JwtAuthGuard)
@@ -41,17 +43,35 @@ export class DiariesController {
     return this.diariesService.findOne(request.user.userId, id);
   }
 
+  @Get(':id/shares')
+  shares(
+    @Req() request: Request & { user: { userId: string } },
+    @Param('id') id: string,
+  ) {
+    return this.diariesService.getShares(request.user.userId, id);
+  }
+
+  @Put(':id/shares')
+  replaceShares(
+    @Req() request: Request & { user: { userId: string } },
+    @Param('id') id: string,
+    @Body() dto: ReplaceSharesDto,
+  ) {
+    return this.diariesService.replaceShares(
+      request.user.userId,
+      id,
+      dto.recipientRelationshipIds,
+      dto.shareVersion,
+    );
+  }
+
   @Patch(':id')
   update(
     @Req() request: Request & { user: { userId: string } },
     @Param('id') id: string,
     @Body() updateDiaryDto: UpdateDiaryDto,
   ) {
-    return this.diariesService.update(
-      request.user.userId,
-      id,
-      updateDiaryDto,
-    );
+    return this.diariesService.update(request.user.userId, id, updateDiaryDto);
   }
 
   @Delete(':id')
