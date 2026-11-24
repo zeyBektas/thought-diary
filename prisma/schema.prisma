@@ -13,6 +13,7 @@ model Role {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
   users     User[]
+  assignments UserRole[]
 
   @@map("roles")
 }
@@ -41,7 +42,17 @@ model Organization {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
+  status      OrganizationStatus @default(ACTIVE)
+  suspendedAt DateTime?
+  suspendedById String?
+  suspensionReason String?
+  reactivatedAt DateTime?
+  suspendedBy User? @relation("OrganizationSuspendedBy", fields: [suspendedById], references: [id], onDelete: Restrict)
   users       User[]
+  memberships OrganizationMembership[]
+  invitations OrganizationInvitation[]
+  relationships CareRelationship[]
+  auditLogs AuditLog[]
 
   @@map("organizations")
 }
@@ -73,6 +84,18 @@ model User {
   refreshTokens          RefreshToken[]
   organization           Organization?      @relation(fields: [organizationId], references: [id])
   role                   Role               @relation(fields: [roleId], references: [id])
+  roleAssignments UserRole[] @relation("RoleAssignee")
+  rolesAssigned UserRole[] @relation("RoleAssigner")
+  counselorProfile CounselorProfile? @relation("CounselorProfileUser")
+  counselorApprovals CounselorProfile[] @relation("CounselorApprovedBy")
+  counselorRejections CounselorProfile[] @relation("CounselorRejectedBy")
+  counselorSuspensions CounselorProfile[] @relation("CounselorSuspendedBy")
+  organizationsSuspended Organization[] @relation("OrganizationSuspendedBy")
+  memberships OrganizationMembership[] @relation("MembershipUser")
+  membershipsAdded OrganizationMembership[] @relation("MembershipAddedBy")
+  invitationsReceived OrganizationInvitation[] @relation("InvitationUser")
+  invitationsSent OrganizationInvitation[] @relation("InvitationInviter")
+  auditLogs AuditLog[] @relation("AuditActor")
 
   @@index([roleId])
   @@index([organizationId])
@@ -84,6 +107,7 @@ model CareRelationship {
   id          String                 @id @default(uuid())
   counselorId String
   clientId    String
+  organizationId String?
   status      CareRelationshipStatus @default(PENDING)
   requestedAt DateTime               @default(now())
   respondedAt DateTime?
@@ -93,13 +117,123 @@ model CareRelationship {
   deletedAt   DateTime?
   client      User                   @relation("ClientRelationships", fields: [clientId], references: [id], onDelete: Cascade)
   counselor   User                   @relation("CounselorRelationships", fields: [counselorId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   journalShares JournalShare[]
 
   // Non-revoked pair uniqueness is enforced by a partial index in migration SQL.
   @@index([counselorId])
   @@index([clientId])
   @@index([status])
+  @@index([organizationId])
   @@map("care_relationships")
+}
+
+model UserRole {
+  id String @id @default(uuid())
+  userId String
+  roleId String
+  assignedById String?
+  assignedAt DateTime @default(now())
+  revokedAt DateTime?
+  user User @relation("RoleAssignee", fields: [userId], references: [id], onDelete: Restrict)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assignedBy User? @relation("RoleAssigner", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  // Active (userId, roleId) uniqueness is enforced by a partial index in migration SQL.
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model CounselorProfile {
+  id String @id @default(uuid())
+  userId String @unique
+  approvalStatus CounselorApprovalStatus @default(PENDING)
+  professionalTitle String?
+  biography String?
+  approvedById String?
+  approvedAt DateTime?
+  rejectedById String?
+  rejectedAt DateTime?
+  rejectionReason String?
+  suspendedById String?
+  suspendedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation("CounselorProfileUser", fields: [userId], references: [id], onDelete: Restrict)
+  approvedBy User? @relation("CounselorApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  rejectedBy User? @relation("CounselorRejectedBy", fields: [rejectedById], references: [id], onDelete: Restrict)
+  suspendedBy User? @relation("CounselorSuspendedBy", fields: [suspendedById], references: [id], onDelete: Restrict)
+
+  @@index([approvalStatus])
+  @@map("counselor_profiles")
+}
+
+model OrganizationMembership {
+  id String @id @default(uuid())
+  organizationId String
+  userId String
+  status MembershipStatus @default(ACTIVE)
+  permission OrganizationPermission @default(MEMBER)
+  addedById String?
+  acceptedAt DateTime?
+  joinedAt DateTime @default(now())
+  leftAt DateTime?
+  removedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user User @relation("MembershipUser", fields: [userId], references: [id], onDelete: Restrict)
+  addedBy User? @relation("MembershipAddedBy", fields: [addedById], references: [id], onDelete: Restrict)
+
+  // Current (organizationId, userId) uniqueness is enforced by a partial index in migration SQL.
+  @@index([userId, status])
+  @@index([organizationId, status, permission])
+  @@map("organization_memberships")
+}
+
+model OrganizationInvitation {
+  id String @id @default(uuid())
+  organizationId String
+  email String
+  invitedUserId String?
+  type InvitationType
+  status InvitationStatus @default(PENDING)
+  tokenHash String @unique
+  invitedById String
+  expiresAt DateTime
+  acceptedAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  invitedUser User? @relation("InvitationUser", fields: [invitedUserId], references: [id], onDelete: Restrict)
+  invitedBy User @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  // Pending normalized-email uniqueness is enforced by an expression index in migration SQL.
+  @@index([organizationId, email])
+  @@index([expiresAt])
+  @@map("organization_invitations")
+}
+
+model AuditLog {
+  id String @id @default(uuid())
+  actorUserId String
+  organizationId String?
+  action String
+  targetType String
+  targetId String
+  result String
+  metadata Json?
+  correlationId String?
+  createdAt DateTime @default(now())
+  actor User @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
 }
 
 model RefreshToken {
@@ -186,6 +320,44 @@ enum RoleCode {
   ADMIN
   CLIENT
   COUNSELOR
+  PLATFORM_ADMIN
+}
+
+enum CounselorApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+  LEFT
+  REMOVED
+}
+
+enum OrganizationPermission {
+  MEMBER
+  ORG_ADMIN
+}
+
+enum InvitationType {
+  CLIENT
+  COUNSELOR
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  REVOKED
 }
 
 enum CareRelationshipStatus {
