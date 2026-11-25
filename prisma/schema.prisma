@@ -133,7 +133,8 @@ model UserRole {
   userId String
   roleId String
   assignedById String?
-  assignedAt DateTime @default(now())
+  // NULL means a legacy assignment whose original timestamp is unknown.
+  assignedAt DateTime? @default(now())
   revokedAt DateTime?
   user User @relation("RoleAssignee", fields: [userId], references: [id], onDelete: Restrict)
   role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)

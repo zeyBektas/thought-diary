@@ -97,6 +97,7 @@ describe('isolated diary sharing', () => {
         lastName: 'Client',
         passwordHash: 'fixture',
         roleId: role.id,
+        roleAssignments: { create: { roleId: role.id } },
       },
     });
     const otherRelationship = await db.careRelationship.create({

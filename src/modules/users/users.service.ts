@@ -1,5 +1,34 @@
 import { PrismaService } from '@/core/prisma/prisma.service';
-import { ConflictException, Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { RoleCode } from '@prisma/client';
+
+// Authorization always uses the current resolved role collection, never the
+// legacy compatibility role or a token claim.
+export function hasCurrentRole(
+  user: { roles: readonly RoleCode[] },
+  role: RoleCode,
+): boolean {
+  return user.roles.includes(role);
+}
+
+export type CurrentUser = Awaited<
+  ReturnType<UsersService['resolveCurrentUser']>
+>;
+
+const activeRoleAssignment = { revokedAt: null, role: { deletedAt: null } };
+
+const userRelations = {
+  role: true,
+  organization: true,
+  roleAssignments: {
+    where: activeRoleAssignment,
+    include: { role: true },
+  },
+} as const;
 
 @Injectable()
 export class UsersService {
@@ -10,10 +39,7 @@ export class UsersService {
       where: {
         email: email.toLowerCase(),
       },
-      include: {
-        role: true,
-        organization: true,
-      },
+      include: userRelations,
     });
   }
 
@@ -22,11 +48,48 @@ export class UsersService {
       where: {
         id,
       },
-      include: {
-        role: true,
-        organization: true,
+      include: userRelations,
+    });
+  }
+
+  async resolveCurrentUser(id: string) {
+    if (typeof id !== 'string' || !id) {
+      throw new UnauthorizedException('Invalid user identity');
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        status: true,
+        deletedAt: true,
+        role: { select: { code: true } },
+        roleAssignments: {
+          where: activeRoleAssignment,
+          select: { role: { select: { code: true } } },
+        },
       },
     });
+    if (!user || user.deletedAt || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User is not active');
+    }
+    return {
+      userId: user.id,
+      email: user.email,
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      phone: user.phone,
+      status: user.status,
+      roles: user.roleAssignments.map(({ role }) => role.code),
+      // Legacy compatibility only: this value may be stale or revoked and must
+      // never be used for authorization. `roles` is the current collection.
+      role: user.role.code,
+    };
   }
 
   async create(data: {
@@ -53,11 +116,9 @@ export class UsersService {
         username: data.username,
         phone: data.phone,
         roleId: data.roleId,
+        roleAssignments: { create: { roleId: data.roleId } },
       },
-      include: {
-        role: true,
-        organization: true,
-      },
+      include: userRelations,
     });
   }
 }

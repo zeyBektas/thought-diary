@@ -30,10 +30,19 @@ describe('RelationshipsService', () => {
     } as unknown as PrismaService,
     users as unknown as UsersService,
   );
+  const assignment = (
+    code: RoleCode,
+    revokedAt: Date | null = null,
+    deletedAt: Date | null = null,
+  ) => ({
+    revokedAt,
+    role: { code, deletedAt },
+  });
   const person = (code: RoleCode, overrides: Record<string, unknown> = {}) => ({
     status: 'ACTIVE',
     deletedAt: null,
     role: { code, deletedAt: null },
+    roleAssignments: [assignment(code)],
     ...overrides,
   });
   const relationship = (status: Status = Status.PENDING) => ({
@@ -80,10 +89,22 @@ describe('RelationshipsService', () => {
   });
 
   it('lists only active relationships and active counselors with active counselor roles', async () => {
-    db.findMany.mockResolvedValue([]);
-    await expect(service.shareableCounselors('client')).resolves.toEqual({
-      counselors: [],
+    const counselor = {
+      id: 'counselor',
+      firstName: 'Synthetic',
+      lastName: 'Counselor',
+      username: null,
+    };
+    db.findMany.mockResolvedValue([{ id: 'rel', counselor }]);
+    await expect(
+      service.shareableCounselors({
+        userId: 'client',
+        roles: [RoleCode.CLIENT],
+      }),
+    ).resolves.toEqual({
+      counselors: [{ relationshipId: 'rel', counselor }],
     });
+    expect(users.findById).not.toHaveBeenCalled();
     expect(db.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -93,30 +114,54 @@ describe('RelationshipsService', () => {
           counselor: {
             status: 'ACTIVE',
             deletedAt: null,
-            role: { code: RoleCode.COUNSELOR, deletedAt: null },
+            roleAssignments: {
+              some: {
+                revokedAt: null,
+                role: { code: RoleCode.COUNSELOR, deletedAt: null },
+              },
+            },
+          },
+        },
+        select: {
+          id: true,
+          counselor: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              username: true,
+            },
           },
         },
       }),
     );
   });
 
-  it.each([
-    ['counselor', person(RoleCode.COUNSELOR)],
-    ['inactive client', person(RoleCode.CLIENT, { status: 'INACTIVE' })],
-    ['deleted client', person(RoleCode.CLIENT, { deletedAt: new Date() })],
-    [
-      'deleted client role',
-      person(RoleCode.CLIENT, {
-        role: { code: RoleCode.CLIENT, deletedAt: new Date() },
+  it('returns an empty list when the client has no shareable counselors', async () => {
+    db.findMany.mockResolvedValue([]);
+    await expect(
+      service.shareableCounselors({
+        userId: 'client',
+        roles: [RoleCode.CLIENT],
       }),
-    ],
-    ['missing client role', person(RoleCode.CLIENT, { role: null })],
-  ])('does not list shareable counselors for %s', async (_label, user) => {
-    users.findById.mockResolvedValue(user);
-    await expect(service.shareableCounselors('client')).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    ).resolves.toEqual({ counselors: [] });
   });
+
+  it.each([
+    { label: 'counselor only', roles: [RoleCode.COUNSELOR] },
+    { label: 'legacy administrator', roles: [RoleCode.ADMIN] },
+    { label: 'no active roles', roles: [] },
+  ])(
+    'does not list shareable counselors for $label despite a legacy client role',
+    async ({ roles }) => {
+      const user = { userId: 'client', roles, role: RoleCode.CLIENT };
+      await expect(service.shareableCounselors(user)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(users.findById).not.toHaveBeenCalled();
+      expect(db.findMany).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['non-counselor', person(RoleCode.CLIENT)],
@@ -191,14 +236,77 @@ describe('RelationshipsService', () => {
     },
   );
 
+  it('lists both sides for a user with active client and counselor roles', async () => {
+    await service.findMine({
+      userId: 'caller',
+      roles: [RoleCode.CLIENT, RoleCode.COUNSELOR],
+    });
+    expect(users.findById).not.toHaveBeenCalled();
+    expect(db.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [{ counselorId: 'caller' }, { clientId: 'caller' }],
+          deletedAt: null,
+        },
+      }),
+    );
+  });
+
+  it('allows a dual-role user to request as counselor and respond as client', async () => {
+    const dual = person(RoleCode.CLIENT, {
+      roleAssignments: [
+        assignment(RoleCode.CLIENT),
+        assignment(RoleCode.COUNSELOR),
+      ],
+    });
+    users.findById.mockImplementation((id: string) =>
+      Promise.resolve(id === 'caller' ? dual : person(RoleCode.CLIENT)),
+    );
+    db.findFirst.mockResolvedValueOnce(null);
+    db.create.mockResolvedValue(relationship());
+    await expect(
+      service.request('caller', { clientId: 'another-client' }),
+    ).resolves.toEqual(relationship());
+    db.findFirst.mockResolvedValue({ ...relationship(), clientId: 'caller' });
+    await expect(
+      service.respond('caller', 'rel', { status: Status.ACTIVE }),
+    ).resolves.toMatchObject({ clientId: 'caller' });
+  });
+
+  it('ignores a revoked role even when the legacy role still names it', async () => {
+    const user = {
+      userId: 'caller',
+      roles: [RoleCode.CLIENT],
+      role: RoleCode.COUNSELOR,
+    };
+    await service.findMine(user);
+    expect(users.findById).not.toHaveBeenCalled();
+    expect(db.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { clientId: 'caller', deletedAt: null },
+      }),
+    );
+    users.findById.mockResolvedValue(
+      person(RoleCode.COUNSELOR, {
+        roleAssignments: [
+          assignment(RoleCode.COUNSELOR, new Date()),
+          assignment(RoleCode.CLIENT),
+        ],
+      }),
+    );
+    await expect(
+      service.request('caller', { clientId: 'client' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it.each([
     [RoleCode.COUNSELOR, 'counselorId'],
     [RoleCode.CLIENT, 'clientId'],
   ])(
     'lists only the %s participant’s non-deleted relationships',
     async (role, field) => {
-      users.findById.mockResolvedValue(person(role));
-      await service.findMine('caller');
+      await service.findMine({ userId: 'caller', roles: [role] });
+      expect(users.findById).not.toHaveBeenCalled();
       expect(db.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { [field]: 'caller', deletedAt: null },
@@ -263,11 +371,11 @@ describe('RelationshipsService', () => {
     ['missing user', null],
     ['inactive user', person(RoleCode.CLIENT, { status: 'INACTIVE' })],
     ['deleted user', person(RoleCode.CLIENT, { deletedAt: new Date() })],
-    ['missing role', person(RoleCode.CLIENT, { role: null })],
+    ['missing role', person(RoleCode.CLIENT, { roleAssignments: [] })],
     [
       'deleted role',
       person(RoleCode.CLIENT, {
-        role: { code: RoleCode.CLIENT, deletedAt: new Date() },
+        roleAssignments: [assignment(RoleCode.CLIENT, null, new Date())],
       }),
     ],
   ])('rejects %s before either mutation', async (_label, user) => {
@@ -316,16 +424,29 @@ describe('RelationshipsService', () => {
     expect(db.updateMany).not.toHaveBeenCalled();
   });
 
-  it.each([null, { code: RoleCode.COUNSELOR, deletedAt: new Date() }])(
-    'rejects missing or deleted roles for request and list',
-    async (role) => {
-      users.findById.mockResolvedValue(person(RoleCode.COUNSELOR, { role }));
+  it.each([
+    { label: 'missing', roleAssignments: [] },
+    {
+      label: 'deleted',
+      roleAssignments: [assignment(RoleCode.COUNSELOR, null, new Date())],
+    },
+    {
+      label: 'revoked',
+      roleAssignments: [assignment(RoleCode.COUNSELOR, new Date())],
+    },
+  ])(
+    'rejects $label roles for request and list',
+    async ({ roleAssignments }) => {
+      await expect(
+        service.findMine({ userId: 'counselor', roles: [] }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(users.findById).not.toHaveBeenCalled();
+      users.findById.mockResolvedValue(
+        person(RoleCode.COUNSELOR, { roleAssignments }),
+      );
       await expect(
         service.request('counselor', { clientId: 'client' }),
       ).rejects.toBeInstanceOf(ForbiddenException);
-      await expect(service.findMine('counselor')).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
       expect(db.findMany).not.toHaveBeenCalled();
       expect(db.create).not.toHaveBeenCalled();
     },

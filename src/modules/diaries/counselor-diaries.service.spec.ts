@@ -49,6 +49,8 @@ describe('CounselorDiariesService', () => {
     expect(statement.sql).toContain('LEFT JOIN LATERAL');
     expect(statement.sql).toContain('ON caller.eligible');
     expect(statement.sql).toContain('role."deletedAt" IS NULL');
+    expect(statement.sql).toContain('assignment."revokedAt" IS NULL');
+    expect(statement.sql).toContain('assignment."userId" = u.id');
     expect(statement.values).toContain('c');
   });
   it('does not return rows when the statement reports an ineligible caller', async () => {
@@ -92,6 +94,12 @@ describe('CounselorDiariesService', () => {
       expect(call[0].sql).toContain('r."clientId" = j."userId"');
       expect(call[0].sql).toContain('s."journalId" = j.id');
       expect(call[0].sql).toContain('counselor_role."deletedAt" IS NULL');
+      expect(call[0].sql).toContain('owner_assignment."revokedAt" IS NULL');
+      expect(call[0].sql).toContain('owner_assignment."userId" = owner.id');
+      expect(call[0].sql).toContain('counselor_assignment."revokedAt" IS NULL');
+      expect(call[0].sql).toContain(
+        'counselor_assignment."userId" = counselor.id',
+      );
     }
   });
 });

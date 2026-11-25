@@ -62,6 +62,41 @@ describe('diary sharing', () => {
       service.replaceShares('other', 'entry', [], version),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
+  it('checks current role assignments for clients and recipient counselors', async () => {
+    await service.replaceShares('owner', 'entry', ['rel'], version);
+    expect(tx.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'owner',
+        status: 'ACTIVE',
+        deletedAt: null,
+        roleAssignments: {
+          some: {
+            revokedAt: null,
+            role: { code: 'CLIENT', deletedAt: null },
+          },
+        },
+      },
+      select: { id: true },
+    });
+    expect(tx.careRelationship.count).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['rel'] },
+        clientId: 'owner',
+        status: 'ACTIVE',
+        deletedAt: null,
+        counselor: {
+          status: 'ACTIVE',
+          deletedAt: null,
+          roleAssignments: {
+            some: {
+              revokedAt: null,
+              role: { code: 'COUNSELOR', deletedAt: null },
+            },
+          },
+        },
+      },
+    });
+  });
   it('replaces and removes recipients, returning effective recipients', async () => {
     await expect(
       service.replaceShares('owner', 'entry', ['rel'], version),
@@ -107,7 +142,12 @@ describe('diary sharing', () => {
             counselor: {
               status: 'ACTIVE',
               deletedAt: null,
-              role: { code: 'COUNSELOR', deletedAt: null },
+              roleAssignments: {
+                some: {
+                  revokedAt: null,
+                  role: { code: 'COUNSELOR', deletedAt: null },
+                },
+              },
             },
           },
         },

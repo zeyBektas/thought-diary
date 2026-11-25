@@ -57,6 +57,7 @@ describe('isolated counselor diary reads', () => {
           lastName: 'Person',
           passwordHash: 'fixture',
           roleId,
+          roleAssignments: { create: { roleId } },
         },
       });
     const [c, other, client] = await Promise.all([
@@ -194,6 +195,7 @@ describe('isolated counselor diary reads', () => {
         lastName: 'Client',
         passwordHash: 'fixture',
         roleId: clientRoleId,
+        roleAssignments: { create: { roleId: clientRoleId } },
       },
     });
     const bad = await db.careRelationship.create({
@@ -253,11 +255,10 @@ describe('isolated counselor diary reads', () => {
     for (const data of [
       { status: 'INACTIVE' as const },
       { deletedAt: new Date() },
-      { roleId: clientRoleId },
     ]) {
       await db.user.update({ where: { id: counselorId }, data });
-      expect((await get('/counselor/diaries')).status).toBe(403);
-      expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(404);
+      expect((await get('/counselor/diaries')).status).toBe(401);
+      expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(401);
       await db.user.update({
         where: { id: counselorId },
         data: { status: 'ACTIVE', deletedAt: null, roleId: counselorRoleId },
@@ -266,7 +267,6 @@ describe('isolated counselor diary reads', () => {
     for (const data of [
       { status: 'INACTIVE' as const },
       { deletedAt: new Date() },
-      { roleId: counselorRoleId },
     ]) {
       await db.user.update({ where: { id: clientId }, data });
       expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(404);
@@ -275,6 +275,57 @@ describe('isolated counselor diary reads', () => {
         data: { status: 'ACTIVE', deletedAt: null, roleId: clientRoleId },
       });
     }
+    // Legacy roleId changes do not override current role assignments.
+    await db.user.update({
+      where: { id: counselorId },
+      data: { roleId: clientRoleId },
+    });
+    expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(200);
+    await db.user.update({
+      where: { id: counselorId },
+      data: { roleId: counselorRoleId },
+    });
+    await db.user.update({
+      where: { id: clientId },
+      data: { roleId: counselorRoleId },
+    });
+    expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(200);
+    await db.user.update({
+      where: { id: clientId },
+      data: { roleId: clientRoleId },
+    });
+
+    // An old JWT cannot retain a revoked counselor assignment.
+    const counselorAssignment = await db.userRole.findFirstOrThrow({
+      where: { userId: counselorId, roleId: counselorRoleId, revokedAt: null },
+    });
+    await db.userRole.update({
+      where: { id: counselorAssignment.id },
+      data: { revokedAt: new Date() },
+    });
+    await db.userRole.create({
+      data: { userId: counselorId, roleId: clientRoleId },
+    });
+    expect((await get('/counselor/diaries')).status).toBe(403);
+    expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(404);
+    await db.userRole.create({
+      data: { userId: counselorId, roleId: counselorRoleId },
+    });
+
+    const ownerAssignment = await db.userRole.findFirstOrThrow({
+      where: { userId: clientId, roleId: clientRoleId, revokedAt: null },
+    });
+    await db.userRole.update({
+      where: { id: ownerAssignment.id },
+      data: { revokedAt: new Date() },
+    });
+    await db.userRole.create({
+      data: { userId: clientId, roleId: counselorRoleId },
+    });
+    expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(404);
+    await db.userRole.create({
+      data: { userId: clientId, roleId: clientRoleId },
+    });
     for (const id of [clientRoleId, counselorRoleId]) {
       await db.role.update({ where: { id }, data: { deletedAt: new Date() } });
       expect((await get(`/counselor/diaries/${journal.id}`)).status).toBe(404);
@@ -338,6 +389,7 @@ describe('isolated counselor diary reads', () => {
           lastName: 'Fixture',
           passwordHash: 'fixture',
           roleId,
+          roleAssignments: { create: { roleId } },
         },
       });
     const [counselor, firstClient, secondClient] = await Promise.all([

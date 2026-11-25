@@ -266,7 +266,12 @@ export class DiariesService {
         id: userId,
         status: 'ACTIVE',
         deletedAt: null,
-        role: { code: RoleCode.CLIENT, deletedAt: null },
+        roleAssignments: {
+          some: {
+            revokedAt: null,
+            role: { code: RoleCode.CLIENT, deletedAt: null },
+          },
+        },
       },
       select: { id: true },
     });
@@ -299,7 +304,12 @@ export class DiariesService {
         counselor: {
           status: 'ACTIVE',
           deletedAt: null,
-          role: { code: RoleCode.COUNSELOR, deletedAt: null },
+          roleAssignments: {
+            some: {
+              revokedAt: null,
+              role: { code: RoleCode.COUNSELOR, deletedAt: null },
+            },
+          },
         },
       },
     });
@@ -334,7 +344,12 @@ export class DiariesService {
           counselor: {
             status: 'ACTIVE',
             deletedAt: null,
-            role: { code: RoleCode.COUNSELOR, deletedAt: null },
+            roleAssignments: {
+              some: {
+                revokedAt: null,
+                role: { code: RoleCode.COUNSELOR, deletedAt: null },
+              },
+            },
           },
         },
       },

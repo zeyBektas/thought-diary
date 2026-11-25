@@ -78,7 +78,11 @@ export async function provisionCounselor(
 
   const existingUser = await usersService.findByEmail(email);
   if (existingUser) {
-    if (existingUser.role.code === RoleCode.COUNSELOR) {
+    if (
+      existingUser.roleAssignments.some(
+        ({ role }) => role.code === RoleCode.COUNSELOR,
+      )
+    ) {
       return { status: 'already-provisioned', email: existingUser.email };
     }
 

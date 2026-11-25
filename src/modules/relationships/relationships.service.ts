@@ -8,7 +8,11 @@ import {
 import { CareRelationshipStatus, Prisma, RoleCode } from '@prisma/client';
 
 import { PrismaService } from '@/core/prisma/prisma.service';
-import { UsersService } from '../users/users.service';
+import {
+  type CurrentUser,
+  hasCurrentRole,
+  UsersService,
+} from '../users/users.service';
 import { CreateRelationshipDto } from './dto/create-relationship.dto';
 import { RespondRelationshipDto } from './dto/respond-relationship.dto';
 
@@ -61,9 +65,7 @@ export class RelationshipsService {
       !counselor ||
       counselor.deletedAt ||
       counselor.status !== 'ACTIVE' ||
-      !counselor.role ||
-      counselor.role.deletedAt ||
-      counselor.role.code !== RoleCode.COUNSELOR
+      !this.hasRole(counselor, RoleCode.COUNSELOR)
     ) {
       throw new ForbiddenException(
         'Only active counselors can request relationships',
@@ -82,7 +84,7 @@ export class RelationshipsService {
       throw new NotFoundException('Client not found');
     }
 
-    if (client.role.code !== RoleCode.CLIENT) {
+    if (!this.hasRole(client, RoleCode.CLIENT)) {
       throw new BadRequestException('Target user must be a client');
     }
 
@@ -119,24 +121,17 @@ export class RelationshipsService {
     }
   }
 
-  async findMine(userId: string) {
-    const user = await this.usersService.findById(userId);
-
-    if (
-      !user ||
-      user.deletedAt ||
-      user.status !== 'ACTIVE' ||
-      !user.role ||
-      user.role.deletedAt
-    ) {
-      throw new ForbiddenException('User is not active');
-    }
-
+  async findMine(user: Pick<CurrentUser, 'userId' | 'roles'>) {
+    const { userId } = user;
     let where: Prisma.CareRelationshipWhereInput;
 
-    if (user.role.code === RoleCode.COUNSELOR) {
+    const counselor = hasCurrentRole(user, RoleCode.COUNSELOR);
+    const client = hasCurrentRole(user, RoleCode.CLIENT);
+    if (counselor && client) {
+      where = { OR: [{ counselorId: userId }, { clientId: userId }] };
+    } else if (counselor) {
       where = { counselorId: userId };
-    } else if (user.role.code === RoleCode.CLIENT) {
+    } else if (client) {
       where = { clientId: userId };
     } else {
       throw new ForbiddenException(
@@ -171,7 +166,7 @@ export class RelationshipsService {
 
     if (
       relationship.clientId !== userId ||
-      user.role.code !== RoleCode.CLIENT
+      !this.hasRole(user, RoleCode.CLIENT)
     ) {
       throw new ForbiddenException(
         'Only the client can respond to this relationship',
@@ -207,20 +202,24 @@ export class RelationshipsService {
     return updated;
   }
 
-  async shareableCounselors(userId: string) {
-    const user = await this.requireActiveParticipant(userId);
-    if (user.role.code !== RoleCode.CLIENT) {
+  async shareableCounselors(user: Pick<CurrentUser, 'userId' | 'roles'>) {
+    if (!hasCurrentRole(user, RoleCode.CLIENT)) {
       throw new ForbiddenException('Only clients can select counselors');
     }
     const relationships = await this.prisma.careRelationship.findMany({
       where: {
-        clientId: userId,
+        clientId: user.userId,
         status: CareRelationshipStatus.ACTIVE,
         deletedAt: null,
         counselor: {
           status: 'ACTIVE',
           deletedAt: null,
-          role: { code: RoleCode.COUNSELOR, deletedAt: null },
+          roleAssignments: {
+            some: {
+              revokedAt: null,
+              role: { code: RoleCode.COUNSELOR, deletedAt: null },
+            },
+          },
         },
       },
       select: {
@@ -254,9 +253,9 @@ export class RelationshipsService {
     if (
       !(
         relationship.counselorId === userId &&
-        user.role.code === RoleCode.COUNSELOR
+        this.hasRole(user, RoleCode.COUNSELOR)
       ) &&
-      !(relationship.clientId === userId && user.role.code === RoleCode.CLIENT)
+      !(relationship.clientId === userId && this.hasRole(user, RoleCode.CLIENT))
     ) {
       throw new ForbiddenException('You are not part of this relationship');
     }
@@ -302,11 +301,24 @@ export class RelationshipsService {
       !user ||
       user.deletedAt ||
       user.status !== 'ACTIVE' ||
-      !user.role ||
-      user.role.deletedAt
+      !user.roleAssignments.some(
+        (assignment) => !assignment.revokedAt && !assignment.role.deletedAt,
+      )
     ) {
       throw new ForbiddenException('User is not active');
     }
     return user;
+  }
+
+  private hasRole(
+    user: NonNullable<Awaited<ReturnType<UsersService['findById']>>>,
+    role: RoleCode,
+  ) {
+    return user.roleAssignments.some(
+      (assignment) =>
+        !assignment.revokedAt &&
+        !assignment.role.deletedAt &&
+        assignment.role.code === role,
+    );
   }
 }

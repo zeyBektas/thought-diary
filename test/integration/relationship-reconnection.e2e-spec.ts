@@ -50,6 +50,7 @@ describe('isolated relationship reconnection', () => {
           lastName: 'Person',
           passwordHash: 'fixture',
           roleId,
+          roleAssignments: { create: { roleId } },
         },
       });
     const [client, counselor] = await Promise.all([
@@ -224,6 +225,7 @@ describe('isolated relationship reconnection', () => {
           lastName: 'Client',
           passwordHash: 'fixture',
           roleId: role.id,
+          roleAssignments: { create: { roleId: role.id } },
         },
       });
       await db.careRelationship.create({
@@ -258,6 +260,7 @@ describe('isolated relationship reconnection', () => {
         lastName: 'Client',
         passwordHash: 'fixture',
         roleId: role.id,
+        roleAssignments: { create: { roleId: role.id } },
       },
     });
     const pair = { clientId: client.id, counselorId };
@@ -295,6 +298,7 @@ describe('isolated relationship reconnection', () => {
         lastName: 'Client',
         passwordHash: 'fixture',
         roleId: role.id,
+        roleAssignments: { create: { roleId: role.id } },
       },
     });
     const delegate = db.careRelationship as unknown as {

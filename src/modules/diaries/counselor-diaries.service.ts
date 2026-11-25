@@ -29,16 +29,25 @@ export class CounselorDiariesService {
   private authorization(userId: string) {
     return Prisma.sql`j."deletedAt" IS NULL AND j.visibility = 'COUNSELOR'
       AND owner."deletedAt" IS NULL AND owner.status = 'ACTIVE'
-      AND owner_role.code = 'CLIENT' AND owner_role."deletedAt" IS NULL
+      AND EXISTS (
+        SELECT 1 FROM user_roles owner_assignment
+        JOIN roles owner_role ON owner_role.id = owner_assignment."roleId"
+        WHERE owner_assignment."userId" = owner.id AND owner_assignment."revokedAt" IS NULL
+          AND owner_role.code = 'CLIENT' AND owner_role."deletedAt" IS NULL
+      )
       AND EXISTS (
         SELECT 1 FROM journal_shares s
         JOIN care_relationships r ON r.id = s."relationshipId"
         JOIN users counselor ON counselor.id = r."counselorId"
-        JOIN roles counselor_role ON counselor_role.id = counselor."roleId"
         WHERE s."journalId" = j.id AND r."clientId" = j."userId"
           AND r."counselorId" = ${userId} AND r.status = 'ACTIVE' AND r."deletedAt" IS NULL
           AND counselor.status = 'ACTIVE' AND counselor."deletedAt" IS NULL
-          AND counselor_role.code = 'COUNSELOR' AND counselor_role."deletedAt" IS NULL
+          AND EXISTS (
+            SELECT 1 FROM user_roles counselor_assignment
+            JOIN roles counselor_role ON counselor_role.id = counselor_assignment."roleId"
+            WHERE counselor_assignment."userId" = counselor.id AND counselor_assignment."revokedAt" IS NULL
+              AND counselor_role.code = 'COUNSELOR' AND counselor_role."deletedAt" IS NULL
+          )
       )`;
   }
 
@@ -48,7 +57,6 @@ export class CounselorDiariesService {
       CASE WHEN emotion.id IS NULL THEN NULL ELSE jsonb_build_object('id', emotion.id, 'code', emotion.code) END AS "primaryEmotion",
       jsonb_build_object('id', owner.id, 'firstName', owner."firstName", 'lastName', owner."lastName") AS client
       FROM journals j JOIN users owner ON owner.id = j."userId"
-      JOIN roles owner_role ON owner_role.id = owner."roleId"
       LEFT JOIN emotions emotion ON emotion.id = j."primaryEmotionId" AND emotion."deletedAt" IS NULL
       WHERE ${this.authorization(userId)} ${extra}`;
   }
@@ -100,9 +108,13 @@ export class CounselorDiariesService {
     const result = await this.prisma.$queryRaw<ListRow[]>(Prisma.sql`
       SELECT caller.eligible, page.*
       FROM (SELECT EXISTS (
-        SELECT 1 FROM users u JOIN roles role ON role.id = u."roleId"
+        SELECT 1 FROM users u
         WHERE u.id = ${userId} AND u.status = 'ACTIVE' AND u."deletedAt" IS NULL
-          AND role.code = 'COUNSELOR' AND role."deletedAt" IS NULL
+          AND EXISTS (
+            SELECT 1 FROM user_roles assignment JOIN roles role ON role.id = assignment."roleId"
+            WHERE assignment."userId" = u.id AND assignment."revokedAt" IS NULL
+              AND role.code = 'COUNSELOR' AND role."deletedAt" IS NULL
+          )
       ) AS eligible) caller
       LEFT JOIN LATERAL (${this.query(
         userId,

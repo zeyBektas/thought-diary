@@ -2,6 +2,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 
@@ -13,7 +14,7 @@ import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { BCRYPT_HASH_ROUNDS } from './auth.constants';
-import { RoleCode } from '@prisma/client';
+import { Prisma, RoleCode, UserStatus } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
 
 @Injectable()
@@ -41,7 +42,7 @@ export class AuthService {
       },
     });
 
-    if (!clientRole) {
+    if (!clientRole || clientRole.deletedAt) {
       throw new InternalServerErrorException('CLIENT role is not configured');
     }
 
@@ -87,7 +88,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    if (user.status !== 'ACTIVE') {
+    if (user.status !== 'ACTIVE' || user.deletedAt) {
       throw new UnauthorizedException('User is not active');
     }
 
@@ -103,7 +104,13 @@ export class AuthService {
     user: Awaited<ReturnType<UsersService['create']>>,
   ) {
     const { tokens, data } = await this.prepareTokens(user);
-    await this.prisma.refreshToken.create({ data });
+    await this.prisma.$transaction(async (tx) => {
+      const account = await this.lockAccount(tx, user.id);
+      if (!account || account.status !== 'ACTIVE' || account.deletedAt) {
+        throw new UnauthorizedException('User is not active');
+      }
+      await tx.refreshToken.create({ data });
+    });
     return tokens;
   }
 
@@ -112,8 +119,6 @@ export class AuthService {
   ) {
     const accessToken = await this.jwtService.signAsync({
       sub: user.id,
-      email: user.email,
-      role: user.role.code,
     });
 
     const tokenId = randomUUID();
@@ -186,12 +191,16 @@ export class AuthService {
 
     const user = await this.usersService.findById(payload.sub);
 
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || user.status !== 'ACTIVE' || user.deletedAt) {
       throw new UnauthorizedException('User is not active');
     }
 
     const { tokens, data } = await this.prepareTokens(user);
     await this.prisma.$transaction(async (tx) => {
+      const account = await this.lockAccount(tx, payload.sub);
+      if (!account || account.status !== 'ACTIVE' || account.deletedAt) {
+        throw new UnauthorizedException('User is not active');
+      }
       const now = new Date();
       const consumed = await tx.refreshToken.updateMany({
         where: {
@@ -240,6 +249,46 @@ export class AuthService {
     };
   }
 
+  // Internal foundation for future administration; no public suspension endpoint.
+  // The same account-row lock is held during token issuance and rotation.
+  async suspendAccount(userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const account = await this.lockAccount(tx, userId);
+      if (!account || account.deletedAt) {
+        throw new NotFoundException('User not found');
+      }
+      await tx.user.update({
+        where: { id: userId },
+        data: { status: UserStatus.SUSPENDED },
+      });
+      return this.revokeAllRefreshTokensInTransaction(tx, userId);
+    });
+  }
+
+  async revokeAllRefreshTokens(userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const account = await this.lockAccount(tx, userId);
+      if (!account) throw new NotFoundException('User not found');
+      return this.revokeAllRefreshTokensInTransaction(tx, userId);
+    });
+  }
+
+  private lockAccount(tx: Prisma.TransactionClient, userId: string) {
+    return tx.$queryRaw<Array<{ status: UserStatus; deletedAt: Date | null }>>`
+      SELECT status, "deletedAt" FROM users WHERE id = ${userId} FOR UPDATE
+    `.then((rows) => rows[0]);
+  }
+
+  private revokeAllRefreshTokensInTransaction(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ) {
+    return tx.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
   private getSafeUser(user: Awaited<ReturnType<UsersService['create']>>) {
     return {
       id: user.id,
@@ -249,7 +298,10 @@ export class AuthService {
       lastName: user.lastName,
       phone: user.phone,
       status: user.status,
+      // Legacy compatibility only; this may be stale or revoked. Never use it
+      // for authorization; `roles` contains the current assignments.
       role: user.role,
+      roles: user.roleAssignments.map(({ role }) => role.code),
     };
   }
 }

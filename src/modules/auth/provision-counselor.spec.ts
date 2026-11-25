@@ -142,7 +142,7 @@ describe('counselor provisioning', () => {
     dependencies.roleFindFirst.mockResolvedValue({ id: 'counselor-role' });
     dependencies.findByEmail.mockResolvedValue({
       email: input.email,
-      role: { code: RoleCode.COUNSELOR },
+      roleAssignments: [{ role: { code: RoleCode.COUNSELOR } }],
     });
 
     await expect(provisionCounselor(input, dependencies)).resolves.toEqual({
@@ -157,7 +157,7 @@ describe('counselor provisioning', () => {
     dependencies.roleFindFirst.mockResolvedValue({ id: 'counselor-role' });
     dependencies.findByEmail.mockResolvedValue({
       email: input.email,
-      role: { code: RoleCode.CLIENT },
+      roleAssignments: [{ role: { code: RoleCode.CLIENT } }],
     });
 
     await expect(provisionCounselor(input, dependencies)).rejects.toThrow(

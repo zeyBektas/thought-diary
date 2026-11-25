@@ -22,6 +22,8 @@ describe('AuthService', () => {
       findUnique: jest.fn(),
       updateMany: jest.fn(),
     },
+    user: { update: jest.fn() },
+    $queryRaw: jest.fn(),
     $transaction: jest.fn(),
   };
   const usersService = {
@@ -43,6 +45,11 @@ describe('AuthService', () => {
     }).compile();
 
     service = module.get<AuthService>(AuthService);
+    prisma.$queryRaw.mockResolvedValue([{ status: 'ACTIVE', deletedAt: null }]);
+    prisma.$transaction.mockImplementation(
+      async (callback: (tx: typeof prisma) => Promise<unknown>) =>
+        callback(prisma),
+    );
   });
 
   it('should be defined', () => {
@@ -60,7 +67,14 @@ describe('AuthService', () => {
       lastName: 'Last',
       phone: null,
       status: 'ACTIVE',
+      roleId: 'client-role',
       role: { id: 'client-role', code: RoleCode.CLIENT },
+      roleAssignments: [
+        {
+          roleId: 'client-role',
+          role: { id: 'client-role', code: RoleCode.CLIENT },
+        },
+      ],
     });
     jwtService.signAsync
       .mockResolvedValueOnce('access-token')
@@ -83,7 +97,8 @@ describe('AuthService', () => {
     expect(usersService.create).toHaveBeenCalledWith(
       expect.objectContaining({ roleId: 'client-role' }),
     );
-    expect(result.user.role.code).toBe(RoleCode.CLIENT);
+    expect(result.user.role?.code).toBe(RoleCode.CLIENT);
+    expect(result.user.roles).toEqual([RoleCode.CLIENT]);
   });
 
   describe('refresh', () => {
@@ -171,5 +186,65 @@ describe('AuthService', () => {
       );
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
+  });
+
+  it('suspends a user and revokes refresh tokens in one locked transaction', async () => {
+    prisma.user.update.mockResolvedValue({});
+    prisma.refreshToken.updateMany.mockResolvedValue({ count: 2 });
+    await expect(service.suspendAccount('user-id')).resolves.toEqual({
+      count: 2,
+    });
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-id' },
+      data: { status: 'SUSPENDED' },
+    });
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user-id', revokedAt: null },
+      data: { revokedAt: expect.any(Date) as Date },
+    });
+  });
+
+  it('does not persist a refresh token if the account is suspended while login is in progress', async () => {
+    usersService.findByEmail.mockResolvedValue({
+      id: 'user-id',
+      status: 'ACTIVE',
+      deletedAt: null,
+      passwordHash: 'hash',
+    });
+    jwtService.signAsync.mockResolvedValue('signed');
+    prisma.$queryRaw.mockResolvedValue([
+      { status: 'SUSPENDED', deletedAt: null },
+    ]);
+    await expect(
+      service.login({ email: 'client@example.com', password: 'password' }),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the legacy login role for compatibility while reporting only current roles', async () => {
+    jest.mocked(bcrypt.compare).mockResolvedValue(true as never);
+    usersService.findByEmail.mockResolvedValue({
+      id: 'user-id',
+      email: 'client@example.com',
+      status: 'ACTIVE',
+      deletedAt: null,
+      passwordHash: 'hash',
+      roleId: 'client-role',
+      role: { id: 'client-role', code: RoleCode.CLIENT },
+      roleAssignments: [
+        {
+          roleId: 'counselor-role',
+          role: { id: 'counselor-role', code: RoleCode.COUNSELOR },
+        },
+      ],
+    });
+    jwtService.signAsync.mockResolvedValue('signed');
+    const result = await service.login({
+      email: 'client@example.com',
+      password: 'password',
+    });
+    expect(result.user.role.code).toBe(RoleCode.CLIENT);
+    expect(result.user.roles).toEqual([RoleCode.COUNSELOR]);
   });
 });
