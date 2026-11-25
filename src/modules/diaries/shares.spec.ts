@@ -87,6 +87,7 @@ describe('diary sharing', () => {
         counselor: {
           status: 'ACTIVE',
           deletedAt: null,
+          counselorProfile: { approvalStatus: 'APPROVED' },
           roleAssignments: {
             some: {
               revokedAt: null,
@@ -142,6 +143,7 @@ describe('diary sharing', () => {
             counselor: {
               status: 'ACTIVE',
               deletedAt: null,
+              counselorProfile: { approvalStatus: 'APPROVED' },
               roleAssignments: {
                 some: {
                   revokedAt: null,

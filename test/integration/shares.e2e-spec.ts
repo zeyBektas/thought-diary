@@ -47,6 +47,9 @@ describe('isolated diary sharing', () => {
       roleId: role.id,
       passwordHash: await bcrypt.hash(password, BCRYPT_HASH_ROUNDS),
     });
+    await db.counselorProfile.create({
+      data: { userId: user.id, approvalStatus: 'APPROVED' },
+    });
     const login = await request(app.getHttpServer() as Server)
       .post('/auth/login')
       .send({ email: user.email, password });

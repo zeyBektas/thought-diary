@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { JournalEntryType, Prisma } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
+import { counselorEligibilitySql } from '../counselors/counselor-eligibility';
 import { ListCounselorDiariesDto } from './dto/list-counselor-diaries.dto';
 
 type DiaryRow = {
@@ -38,16 +39,8 @@ export class CounselorDiariesService {
       AND EXISTS (
         SELECT 1 FROM journal_shares s
         JOIN care_relationships r ON r.id = s."relationshipId"
-        JOIN users counselor ON counselor.id = r."counselorId"
         WHERE s."journalId" = j.id AND r."clientId" = j."userId"
           AND r."counselorId" = ${userId} AND r.status = 'ACTIVE' AND r."deletedAt" IS NULL
-          AND counselor.status = 'ACTIVE' AND counselor."deletedAt" IS NULL
-          AND EXISTS (
-            SELECT 1 FROM user_roles counselor_assignment
-            JOIN roles counselor_role ON counselor_role.id = counselor_assignment."roleId"
-            WHERE counselor_assignment."userId" = counselor.id AND counselor_assignment."revokedAt" IS NULL
-              AND counselor_role.code = 'COUNSELOR' AND counselor_role."deletedAt" IS NULL
-          )
       )`;
   }
 
@@ -107,15 +100,7 @@ export class CounselorDiariesService {
     // Eligibility and page contents must be observed in the same statement snapshot.
     const result = await this.prisma.$queryRaw<ListRow[]>(Prisma.sql`
       SELECT caller.eligible, page.*
-      FROM (SELECT EXISTS (
-        SELECT 1 FROM users u
-        WHERE u.id = ${userId} AND u.status = 'ACTIVE' AND u."deletedAt" IS NULL
-          AND EXISTS (
-            SELECT 1 FROM user_roles assignment JOIN roles role ON role.id = assignment."roleId"
-            WHERE assignment."userId" = u.id AND assignment."revokedAt" IS NULL
-              AND role.code = 'COUNSELOR' AND role."deletedAt" IS NULL
-          )
-      ) AS eligible) caller
+      FROM (SELECT ${counselorEligibilitySql(userId)} AS eligible) caller
       LEFT JOIN LATERAL (${this.query(
         userId,
         Prisma.sql`${paging} ORDER BY j."createdAt" DESC, j.id DESC LIMIT ${limit + 1}`,
@@ -124,7 +109,7 @@ export class CounselorDiariesService {
     `);
     if (!result[0]?.eligible)
       throw new ForbiddenException(
-        'Only active counselors can access shared diaries',
+        'Only approved counselors can access shared diaries',
       );
     const rows: DiaryRow[] = result.flatMap((row) => {
       if (row.id === null) return [];
@@ -155,7 +140,10 @@ export class CounselorDiariesService {
 
   async detail(userId: string, id: string) {
     const rows = await this.prisma.$queryRaw<DiaryRow[]>(
-      this.query(userId, Prisma.sql`AND j.id = ${id} LIMIT 1`),
+      this.query(
+        userId,
+        Prisma.sql`AND ${counselorEligibilitySql(userId)} AND j.id = ${id} LIMIT 1`,
+      ),
     );
     if (!rows[0]) throw new NotFoundException('Diary not found');
     return rows[0];

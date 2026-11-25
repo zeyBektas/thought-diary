@@ -21,12 +21,31 @@ describe('RelationshipsService', () => {
     updateMany: jest.fn(),
   };
   const users = { findById: jest.fn() };
+  const user = { findFirst: jest.fn() };
+  const queryRaw = jest.fn();
   const shares = { deleteMany: jest.fn() };
+  const counselorEligibility = {
+    status: 'ACTIVE',
+    deletedAt: null,
+    roleAssignments: {
+      some: {
+        revokedAt: null,
+        role: { code: RoleCode.COUNSELOR, deletedAt: null },
+      },
+    },
+    counselorProfile: { approvalStatus: 'APPROVED' },
+  };
   const service = new RelationshipsService(
     {
       careRelationship: db,
+      user,
       $transaction: (callback: (tx: unknown) => unknown) =>
-        callback({ careRelationship: db, journalShare: shares }),
+        callback({
+          careRelationship: db,
+          journalShare: shares,
+          user,
+          $queryRaw: queryRaw,
+        }),
     } as unknown as PrismaService,
     users as unknown as UsersService,
   );
@@ -62,9 +81,11 @@ describe('RelationshipsService', () => {
     );
     db.findFirst.mockResolvedValue(relationship());
     db.updateMany.mockResolvedValue({ count: 1 });
+    user.findFirst.mockResolvedValue({ id: 'counselor' });
+    queryRaw.mockResolvedValue([{ id: 'profile' }]);
   });
 
-  it('lets an active counselor request a client', async () => {
+  it('lets an approved active counselor request a client', async () => {
     db.findFirst.mockResolvedValue(null);
     db.create.mockResolvedValue(relationship());
     await expect(
@@ -86,9 +107,19 @@ describe('RelationshipsService', () => {
         status: { not: Status.REVOKED },
       },
     });
+    expect(user.findFirst).toHaveBeenCalledTimes(2);
+    for (const query of user.findFirst.mock.calls as unknown[][])
+      expect(query[0]).toEqual({
+        where: { id: 'counselor', ...counselorEligibility },
+        select: { id: true },
+      });
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    expect(queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      user.findFirst.mock.invocationCallOrder[1],
+    );
   });
 
-  it('lists only active relationships and active counselors with active counselor roles', async () => {
+  it('lists only active relationships and eligible approved counselors', async () => {
     const counselor = {
       id: 'counselor',
       firstName: 'Synthetic',
@@ -111,16 +142,7 @@ describe('RelationshipsService', () => {
           clientId: 'client',
           status: Status.ACTIVE,
           deletedAt: null,
-          counselor: {
-            status: 'ACTIVE',
-            deletedAt: null,
-            roleAssignments: {
-              some: {
-                revokedAt: null,
-                role: { code: RoleCode.COUNSELOR, deletedAt: null },
-              },
-            },
-          },
+          counselor: counselorEligibility,
         },
         select: {
           id: true,
@@ -163,12 +185,23 @@ describe('RelationshipsService', () => {
     },
   );
 
-  it.each([
-    ['non-counselor', person(RoleCode.CLIENT)],
-    ['inactive', person(RoleCode.COUNSELOR, { status: 'INACTIVE' })],
-    ['deleted', person(RoleCode.COUNSELOR, { deletedAt: new Date() })],
-  ])('rejects a %s counselor', async (_label, user) => {
-    users.findById.mockResolvedValue(user);
+  it('rejects a request when the database finds no eligible counselor', async () => {
+    user.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      service.request('counselor', { clientId: 'client' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(user.findFirst).toHaveBeenCalledWith({
+      where: { id: 'counselor', ...counselorEligibility },
+      select: { id: true },
+    });
+    expect(db.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a request when counselor eligibility changes before writing', async () => {
+    db.findFirst.mockResolvedValueOnce(null);
+    user.findFirst
+      .mockResolvedValueOnce({ id: 'counselor' })
+      .mockResolvedValueOnce(null);
     await expect(
       service.request('counselor', { clientId: 'client' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -179,9 +212,7 @@ describe('RelationshipsService', () => {
     ['missing client', null, NotFoundException],
     ['non-client target', person(RoleCode.COUNSELOR), BadRequestException],
   ])('rejects a %s', async (_label, target, error) => {
-    users.findById
-      .mockResolvedValueOnce(person(RoleCode.COUNSELOR))
-      .mockResolvedValueOnce(target);
+    users.findById.mockResolvedValueOnce(target);
     await expect(
       service.request('counselor', { clientId: 'client' }),
     ).rejects.toBeInstanceOf(error);
@@ -240,12 +271,16 @@ describe('RelationshipsService', () => {
     await service.findMine({
       userId: 'caller',
       roles: [RoleCode.CLIENT, RoleCode.COUNSELOR],
+      counselorEligible: true,
     });
     expect(users.findById).not.toHaveBeenCalled();
     expect(db.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          OR: [{ counselorId: 'caller' }, { clientId: 'caller' }],
+          OR: [
+            { counselorId: 'caller', counselor: counselorEligibility },
+            { clientId: 'caller' },
+          ],
           deletedAt: null,
         },
       }),
@@ -274,47 +309,60 @@ describe('RelationshipsService', () => {
   });
 
   it('ignores a revoked role even when the legacy role still names it', async () => {
-    const user = {
+    const principal = {
       userId: 'caller',
       roles: [RoleCode.CLIENT],
       role: RoleCode.COUNSELOR,
+      counselorEligible: false,
     };
-    await service.findMine(user);
+    await service.findMine(principal);
     expect(users.findById).not.toHaveBeenCalled();
     expect(db.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { clientId: 'caller', deletedAt: null },
+        where: { OR: [{ clientId: 'caller' }], deletedAt: null },
       }),
     );
-    users.findById.mockResolvedValue(
-      person(RoleCode.COUNSELOR, {
-        roleAssignments: [
-          assignment(RoleCode.COUNSELOR, new Date()),
-          assignment(RoleCode.CLIENT),
-        ],
-      }),
-    );
+    // The filtered current-assignment query excludes the revoked counselor.
+    user.findFirst.mockResolvedValueOnce(null);
     await expect(
       service.request('caller', { clientId: 'client' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it.each([
-    [RoleCode.COUNSELOR, 'counselorId'],
-    [RoleCode.CLIENT, 'clientId'],
+    [
+      RoleCode.COUNSELOR,
+      { counselorId: 'caller', counselor: counselorEligibility },
+    ],
+    [RoleCode.CLIENT, { clientId: 'caller' }],
   ])(
     'lists only the %s participant’s non-deleted relationships',
-    async (role, field) => {
-      await service.findMine({ userId: 'caller', roles: [role] });
+    async (role, where) => {
+      await service.findMine({
+        userId: 'caller',
+        roles: [role],
+        counselorEligible: role === RoleCode.COUNSELOR,
+      });
       expect(users.findById).not.toHaveBeenCalled();
       expect(db.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { [field]: 'caller', deletedAt: null },
+          where: { OR: [where], deletedAt: null },
           orderBy: { createdAt: 'desc' },
         }),
       );
     },
   );
+
+  it('denies counselor-only listing without an approved profile', async () => {
+    await expect(
+      service.findMine({
+        userId: 'caller',
+        roles: [RoleCode.COUNSELOR],
+        counselorEligible: false,
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(db.findMany).not.toHaveBeenCalled();
+  });
 
   it.each([Status.ACTIVE, Status.REJECTED])(
     'lets the intended client respond %s',
@@ -337,6 +385,22 @@ describe('RelationshipsService', () => {
       service.respond(id, 'rel', { status: Status.ACTIVE }),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(db.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('lets a client reject but denies acceptance when the counselor is ineligible', async () => {
+    user.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      service.respond('client', 'rel', { status: Status.ACTIVE }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(db.updateMany).not.toHaveBeenCalled();
+    db.findFirst
+      .mockResolvedValueOnce(relationship())
+      .mockResolvedValueOnce(relationship(Status.REJECTED));
+    await expect(
+      service.respond('client', 'rel', { status: Status.REJECTED }),
+    ).resolves.toEqual(relationship(Status.REJECTED));
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    expect(db.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it.each(['counselor', 'client'])(
@@ -365,6 +429,24 @@ describe('RelationshipsService', () => {
       ForbiddenException,
     );
     expect(db.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('allows client revocation while the counselor is ineligible', async () => {
+    db.findFirst.mockResolvedValue(relationship(Status.ACTIVE));
+    queryRaw.mockResolvedValue([]);
+    await expect(service.revoke('counselor', 'rel')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(db.updateMany).not.toHaveBeenCalled();
+    db.findFirst
+      .mockResolvedValueOnce(relationship(Status.ACTIVE))
+      .mockResolvedValueOnce(relationship(Status.REVOKED));
+    await expect(service.revoke('client', 'rel')).resolves.toEqual(
+      relationship(Status.REVOKED),
+    );
+    expect(shares.deleteMany).toHaveBeenCalledWith({
+      where: { relationshipId: 'rel' },
+    });
   });
 
   it.each([
@@ -435,20 +517,25 @@ describe('RelationshipsService', () => {
       roleAssignments: [assignment(RoleCode.COUNSELOR, new Date())],
     },
   ])(
-    'rejects $label roles for request and list',
+    'rejects $label counselor roles for listing and revocation',
     async ({ roleAssignments }) => {
       await expect(
-        service.findMine({ userId: 'counselor', roles: [] }),
+        service.findMine({
+          userId: 'counselor',
+          roles: [],
+          counselorEligible: false,
+        }),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(users.findById).not.toHaveBeenCalled();
       users.findById.mockResolvedValue(
         person(RoleCode.COUNSELOR, { roleAssignments }),
       );
-      await expect(
-        service.request('counselor', { clientId: 'client' }),
-      ).rejects.toBeInstanceOf(ForbiddenException);
+      db.findFirst.mockResolvedValue(relationship(Status.ACTIVE));
+      await expect(service.revoke('counselor', 'rel')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
       expect(db.findMany).not.toHaveBeenCalled();
-      expect(db.create).not.toHaveBeenCalled();
+      expect(db.updateMany).not.toHaveBeenCalled();
     },
   );
 

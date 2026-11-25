@@ -4,7 +4,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { RoleCode } from '@prisma/client';
+import { CounselorApprovalStatus, RoleCode } from '@prisma/client';
 
 // Authorization always uses the current resolved role collection, never the
 // legacy compatibility role or a token claim.
@@ -72,11 +72,13 @@ export class UsersService {
           where: activeRoleAssignment,
           select: { role: { select: { code: true } } },
         },
+        counselorProfile: { select: { approvalStatus: true } },
       },
     });
     if (!user || user.deletedAt || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('User is not active');
     }
+    const roles = user.roleAssignments.map(({ role }) => role.code);
     return {
       userId: user.id,
       email: user.email,
@@ -85,7 +87,11 @@ export class UsersService {
       lastName: user.lastName,
       phone: user.phone,
       status: user.status,
-      roles: user.roleAssignments.map(({ role }) => role.code),
+      roles,
+      counselorEligible:
+        roles.includes(RoleCode.COUNSELOR) &&
+        user.counselorProfile?.approvalStatus ===
+          CounselorApprovalStatus.APPROVED,
       // Legacy compatibility only: this value may be stale or revoked and must
       // never be used for authorization. `roles` is the current collection.
       role: user.role.code,

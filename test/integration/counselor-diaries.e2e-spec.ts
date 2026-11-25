@@ -65,6 +65,12 @@ describe('isolated counselor diary reads', () => {
       make(cr.id),
       make(ur.id),
     ]);
+    await db.counselorProfile.createMany({
+      data: [
+        { userId: c.id, approvalStatus: 'APPROVED' },
+        { userId: other.id, approvalStatus: 'APPROVED' },
+      ],
+    });
     counselorId = c.id;
     otherId = other.id;
     clientId = client.id;
@@ -250,9 +256,63 @@ describe('isolated counselor diary reads', () => {
       (deleted.body as { primaryEmotion: unknown }).primaryEmotion,
     ).toBeNull();
   });
+  it.each(['PENDING', 'REJECTED', 'SUSPENDED'] as const)(
+    'denies a %s counselor even when a historical grant still exists',
+    async (approvalStatus) => {
+      const journal = await entry();
+      const clientToken = app.get(JwtService).sign({ sub: clientId });
+      await get(`/counselor/diaries/${journal.id}`).expect(200);
+
+      await db.counselorProfile.update({
+        where: { userId: counselorId },
+        data: { approvalStatus },
+      });
+      try {
+        await get('/counselor/diaries').expect(403);
+        await get(`/counselor/diaries/${journal.id}`).expect(404);
+        await get('/relationships').expect(403);
+        await request(server())
+          .post('/relationships')
+          .set('Authorization', auth(token))
+          .send({ clientId })
+          .expect(403);
+
+        const options = await get(
+          '/relationships/shareable-counselors',
+          clientToken,
+        ).expect(200);
+        expect(options.body).toEqual({ counselors: [] });
+        const owner = await get(
+          `/diaries/${journal.id}/shares`,
+          clientToken,
+        ).expect(200);
+        const { shareVersion, recipients } = owner.body as {
+          shareVersion: string;
+          recipients: unknown[];
+        };
+        expect(recipients).toEqual([]);
+        await request(server())
+          .put(`/diaries/${journal.id}/shares`)
+          .set('Authorization', auth(clientToken))
+          .send({ recipientRelationshipIds: [relationId], shareVersion })
+          .expect(400);
+        expect(
+          await db.journalShare.count({
+            where: { journalId: journal.id, relationshipId: relationId },
+          }),
+        ).toBe(1);
+      } finally {
+        await db.counselorProfile.update({
+          where: { userId: counselorId },
+          data: { approvalStatus: 'APPROVED' },
+        });
+      }
+    },
+  );
   it('checks current account and role state even for an old token', async () => {
     const journal = await entry();
     for (const data of [
+      { status: 'SUSPENDED' as const },
       { status: 'INACTIVE' as const },
       { deletedAt: new Date() },
     ]) {
@@ -397,6 +457,9 @@ describe('isolated counselor diary reads', () => {
       makeUser(clientRoleId),
       makeUser(clientRoleId),
     ]);
+    await db.counselorProfile.create({
+      data: { userId: counselor.id, approvalStatus: 'APPROVED' },
+    });
     const pageToken = app
       .get(JwtService)
       .sign({ sub: counselor.id, role: 'COUNSELOR', email: counselor.email });

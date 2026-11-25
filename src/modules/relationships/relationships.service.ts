@@ -9,6 +9,11 @@ import { CareRelationshipStatus, Prisma, RoleCode } from '@prisma/client';
 
 import { PrismaService } from '@/core/prisma/prisma.service';
 import {
+  counselorEligibility,
+  lockEligibleCounselor,
+  requireEligibleCounselor,
+} from '../counselors/counselor-eligibility';
+import {
   type CurrentUser,
   hasCurrentRole,
   UsersService,
@@ -59,18 +64,7 @@ export class RelationshipsService {
   ) {}
 
   async request(counselorId: string, dto: CreateRelationshipDto) {
-    const counselor = await this.usersService.findById(counselorId);
-
-    if (
-      !counselor ||
-      counselor.deletedAt ||
-      counselor.status !== 'ACTIVE' ||
-      !this.hasRole(counselor, RoleCode.COUNSELOR)
-    ) {
-      throw new ForbiddenException(
-        'Only active counselors can request relationships',
-      );
-    }
+    await requireEligibleCounselor(this.prisma, counselorId);
 
     if (counselorId === dto.clientId) {
       throw new BadRequestException(
@@ -101,13 +95,16 @@ export class RelationshipsService {
     }
 
     try {
-      return await this.prisma.careRelationship.create({
-        data: {
-          counselorId,
-          clientId: dto.clientId,
-          status: CareRelationshipStatus.PENDING,
-        },
-        include: this.relationshipInclude,
+      return await this.prisma.$transaction(async (tx) => {
+        await lockEligibleCounselor(tx, counselorId);
+        return tx.careRelationship.create({
+          data: {
+            counselorId,
+            clientId: dto.clientId,
+            status: CareRelationshipStatus.PENDING,
+          },
+          include: this.relationshipInclude,
+        });
       });
     } catch (error) {
       if (
@@ -121,27 +118,29 @@ export class RelationshipsService {
     }
   }
 
-  async findMine(user: Pick<CurrentUser, 'userId' | 'roles'>) {
+  async findMine(
+    user: Pick<CurrentUser, 'userId' | 'roles' | 'counselorEligible'>,
+  ) {
     const { userId } = user;
-    let where: Prisma.CareRelationshipWhereInput;
-
-    const counselor = hasCurrentRole(user, RoleCode.COUNSELOR);
+    const counselor = user.counselorEligible;
     const client = hasCurrentRole(user, RoleCode.CLIENT);
-    if (counselor && client) {
-      where = { OR: [{ counselorId: userId }, { clientId: userId }] };
-    } else if (counselor) {
-      where = { counselorId: userId };
-    } else if (client) {
-      where = { clientId: userId };
-    } else {
+    if (!counselor && !client) {
       throw new ForbiddenException(
-        'Only counselors and clients can access relationships',
+        'Only approved counselors and clients can access relationships',
       );
     }
 
+    const participation: Prisma.CareRelationshipWhereInput[] = [];
+    if (counselor)
+      participation.push({
+        counselorId: userId,
+        counselor: counselorEligibility,
+      });
+    if (client) participation.push({ clientId: userId });
+
     return this.prisma.careRelationship.findMany({
       where: {
-        ...where,
+        OR: participation,
         deletedAt: null,
       },
       include: this.relationshipInclude,
@@ -177,29 +176,33 @@ export class RelationshipsService {
       throw new BadRequestException('Relationship is not pending');
     }
 
-    const result = await this.prisma.careRelationship.updateMany({
-      where: {
-        id,
-        clientId: userId,
-        status: CareRelationshipStatus.PENDING,
-        deletedAt: null,
-      },
-      data: {
-        status: dto.status,
-        respondedAt: new Date(),
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.status === CareRelationshipStatus.ACTIVE)
+        await lockEligibleCounselor(tx, relationship.counselorId);
+      const result = await tx.careRelationship.updateMany({
+        where: {
+          id,
+          clientId: userId,
+          status: CareRelationshipStatus.PENDING,
+          deletedAt: null,
+        },
+        data: {
+          status: dto.status,
+          respondedAt: new Date(),
+        },
+      });
 
-    if (result.count === 0) {
-      throw new BadRequestException('Relationship is not pending');
-    }
+      if (result.count === 0) {
+        throw new BadRequestException('Relationship is not pending');
+      }
 
-    const updated = await this.prisma.careRelationship.findFirst({
-      where: { id, deletedAt: null },
-      include: this.relationshipInclude,
+      const updated = await tx.careRelationship.findFirst({
+        where: { id, deletedAt: null },
+        include: this.relationshipInclude,
+      });
+      if (!updated) throw new NotFoundException('Relationship not found');
+      return updated;
     });
-    if (!updated) throw new NotFoundException('Relationship not found');
-    return updated;
   }
 
   async shareableCounselors(user: Pick<CurrentUser, 'userId' | 'roles'>) {
@@ -211,16 +214,7 @@ export class RelationshipsService {
         clientId: user.userId,
         status: CareRelationshipStatus.ACTIVE,
         deletedAt: null,
-        counselor: {
-          status: 'ACTIVE',
-          deletedAt: null,
-          roleAssignments: {
-            some: {
-              revokedAt: null,
-              role: { code: RoleCode.COUNSELOR, deletedAt: null },
-            },
-          },
-        },
+        counselor: counselorEligibility,
       },
       select: {
         id: true,
@@ -250,13 +244,12 @@ export class RelationshipsService {
       throw new NotFoundException('Relationship not found');
     }
 
-    if (
-      !(
-        relationship.counselorId === userId &&
-        this.hasRole(user, RoleCode.COUNSELOR)
-      ) &&
-      !(relationship.clientId === userId && this.hasRole(user, RoleCode.CLIENT))
-    ) {
+    const asCounselor =
+      relationship.counselorId === userId &&
+      this.hasRole(user, RoleCode.COUNSELOR);
+    const asClient =
+      relationship.clientId === userId && this.hasRole(user, RoleCode.CLIENT);
+    if (!asCounselor && !asClient) {
       throw new ForbiddenException('You are not part of this relationship');
     }
 
@@ -265,6 +258,7 @@ export class RelationshipsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      if (!asClient) await lockEligibleCounselor(tx, userId);
       const result = await tx.careRelationship.updateMany({
         where: {
           id,

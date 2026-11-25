@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
+import { CounselorsModule } from './modules/counselors/counselors.module';
 import { UsersModule } from './modules/users/users.module';
 import { DiariesModule } from './modules/diaries/diaries.module';
 import { RelationshipsModule } from './modules/relationships/relationships.module';
@@ -20,6 +21,7 @@ import { configuration, validationSchema } from './config';
     PrismaModule,
 
     AuthModule,
+    CounselorsModule,
     UsersModule,
     DiariesModule,
     RelationshipsModule,

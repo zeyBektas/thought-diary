@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { hasCurrentRole, UsersService } from './users.service';
 import { PrismaService } from '@/core/prisma/prisma.service';
-import { RoleCode } from '@prisma/client';
+import { CounselorApprovalStatus, RoleCode } from '@prisma/client';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -32,6 +32,7 @@ describe('UsersService', () => {
       deletedAt: null,
       roleId: 'admin',
       role: { code: RoleCode.ADMIN },
+      counselorProfile: null,
       roleAssignments: [
         { roleId: 'admin', role: { code: RoleCode.ADMIN } },
         { roleId: 'client', role: { code: RoleCode.CLIENT } },
@@ -42,6 +43,7 @@ describe('UsersService', () => {
     expect(user.role).toBe(RoleCode.ADMIN);
     expect(hasCurrentRole(user, RoleCode.PLATFORM_ADMIN)).toBe(false);
     expect(hasCurrentRole(user, RoleCode.CLIENT)).toBe(true);
+    expect(user.counselorEligible).toBe(false);
     expect(prisma.user.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({
         select: expect.objectContaining({
@@ -66,6 +68,7 @@ describe('UsersService', () => {
       deletedAt: null,
       roleId: 'client',
       role: { code: RoleCode.CLIENT },
+      counselorProfile: null,
       roleAssignments: [
         { roleId: 'counselor', role: { code: RoleCode.COUNSELOR } },
       ],
@@ -74,7 +77,40 @@ describe('UsersService', () => {
     expect(user.role).toBe(RoleCode.CLIENT);
     expect(hasCurrentRole(user, RoleCode.CLIENT)).toBe(false);
     expect(hasCurrentRole(user, RoleCode.COUNSELOR)).toBe(true);
+    expect(user.counselorEligible).toBe(false);
   });
+
+  it.each([
+    [CounselorApprovalStatus.PENDING, [RoleCode.COUNSELOR], false],
+    [CounselorApprovalStatus.REJECTED, [RoleCode.COUNSELOR], false],
+    [CounselorApprovalStatus.SUSPENDED, [RoleCode.COUNSELOR], false],
+    [CounselorApprovalStatus.APPROVED, [RoleCode.CLIENT], false],
+    [
+      CounselorApprovalStatus.APPROVED,
+      [RoleCode.CLIENT, RoleCode.COUNSELOR],
+      true,
+    ],
+  ])(
+    'combines current %s profile status and active assignments for eligibility',
+    async (
+      approvalStatus: CounselorApprovalStatus,
+      roles: RoleCode[],
+      counselorEligible: boolean,
+    ) => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user',
+        status: 'ACTIVE',
+        deletedAt: null,
+        role: { code: RoleCode.CLIENT },
+        roleAssignments: roles.map((code) => ({ role: { code } })),
+        counselorProfile: { approvalStatus },
+      });
+      await expect(service.resolveCurrentUser('user')).resolves.toMatchObject({
+        roles,
+        counselorEligible,
+      });
+    },
+  );
 
   it.each([
     null,

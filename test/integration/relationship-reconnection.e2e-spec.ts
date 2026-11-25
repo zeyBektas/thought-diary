@@ -57,6 +57,9 @@ describe('isolated relationship reconnection', () => {
       make(clientRole.id),
       make(counselorRole.id),
     ]);
+    await db.counselorProfile.create({
+      data: { userId: counselor.id, approvalStatus: 'APPROVED' },
+    });
     clientId = client.id;
     counselorId = counselor.id;
     const jwt = app.get(JwtService);

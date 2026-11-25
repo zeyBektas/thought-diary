@@ -84,7 +84,12 @@ describe('isolated current-user authorization', () => {
     await db.userRole.create({
       data: { userId: account.user.id, roleId: counselorRole.id },
     });
+    expect((await get('/counselor/diaries')).status).toBe(403);
+    await db.counselorProfile.create({
+      data: { userId: account.user.id, approvalStatus: 'APPROVED' },
+    });
     const dual = await get('/auth/me');
+    expect(dual.body).toMatchObject({ counselorEligible: true });
     expect((dual.body as { roles: string[] }).roles.sort()).toEqual([
       'CLIENT',
       'COUNSELOR',
@@ -135,6 +140,7 @@ describe('isolated current-user authorization', () => {
     expect((await get('/auth/me')).body).toMatchObject({
       role: 'CLIENT',
       roles: ['CLIENT'],
+      counselorEligible: false,
     });
   });
 
@@ -148,6 +154,9 @@ describe('isolated current-user authorization', () => {
         { userId: account.user.id, roleId: counselorRole.id },
         { userId: other.user.id, roleId: counselorRole.id },
       ],
+    });
+    await db.counselorProfile.create({
+      data: { userId: other.user.id, approvalStatus: 'APPROVED' },
     });
     const asCounselor = await db.careRelationship.create({
       data: {
@@ -170,9 +179,19 @@ describe('isolated current-user authorization', () => {
         status: 'ACTIVE',
       },
     });
-    const response = await request(server())
-      .get('/relationships')
-      .set('Authorization', bearer(account.accessToken));
+    const getRelationships = () =>
+      request(server())
+        .get('/relationships')
+        .set('Authorization', bearer(account.accessToken));
+    const unapproved = await getRelationships();
+    expect(unapproved.status).toBe(200);
+    expect(
+      (unapproved.body as Array<{ id: string }>).map(({ id }) => id),
+    ).toEqual([asClient.id]);
+    await db.counselorProfile.create({
+      data: { userId: account.user.id, approvalStatus: 'APPROVED' },
+    });
+    const response = await getRelationships();
     expect(response.status).toBe(200);
     const ids = (response.body as Array<{ id: string }>).map(({ id }) => id);
     expect(ids).toEqual(expect.arrayContaining([asCounselor.id, asClient.id]));
@@ -319,6 +338,7 @@ describe('isolated current-user authorization', () => {
         passwordHash: 'fixture',
         roleId: counselorRole.id,
         roleAssignments: { create: { roleId: counselorRole.id } },
+        counselorProfile: { create: { approvalStatus: 'APPROVED' } },
       },
     });
     const relationship = await db.careRelationship.create({
@@ -339,6 +359,14 @@ describe('isolated current-user authorization', () => {
     const grant = await db.journalShare.create({
       data: { journalId: journal.id, relationshipId: relationship.id },
     });
+    const counselorToken = app
+      .get(JwtService)
+      .sign({ sub: counselor.id, email: counselor.email, role: 'COUNSELOR' });
+    const readDiary = () =>
+      request(server())
+        .get(`/counselor/diaries/${journal.id}`)
+        .set('Authorization', bearer(counselorToken));
+    expect((await readDiary()).status).toBe(200);
     await app.get(AuthService).suspendAccount(account.user.id);
     expect(
       (await db.user.findUniqueOrThrow({ where: { id: account.user.id } }))
@@ -367,15 +395,6 @@ describe('isolated current-user authorization', () => {
     expect(
       await db.journalShare.findUnique({ where: { id: grant.id } }),
     ).not.toBeNull();
-    const counselorToken = app
-      .get(JwtService)
-      .sign({ sub: counselor.id, email: counselor.email, role: 'COUNSELOR' });
-    expect(
-      (
-        await request(server())
-          .get(`/counselor/diaries/${journal.id}`)
-          .set('Authorization', bearer(counselorToken))
-      ).status,
-    ).toBe(404);
+    expect((await readDiary()).status).toBe(404);
   });
 });

@@ -8,6 +8,7 @@ import {
 import { createHash } from 'node:crypto';
 import { JournalVisibility, Prisma, RoleCode } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
+import { counselorEligibility } from '../counselors/counselor-eligibility';
 import { CreateDiaryDto } from './dto/create-diary.dto';
 import { UpdateDiaryDto } from './dto/update-diary.dto';
 
@@ -23,7 +24,7 @@ export class DiariesService {
         data: { userId, ...data },
         omit: { shareRevision: true },
       });
-    return this.prisma.$transaction(async (tx) => {
+    return this.sharingTransaction(async (tx) => {
       await this.requireClient(tx, userId);
       this.checkVisibility(
         data.visibility ?? JournalVisibility.PRIVATE,
@@ -87,7 +88,7 @@ export class DiariesService {
       throw new BadRequestException(
         'A valid shareVersion is required with recipients',
       );
-    return this.prisma.$transaction(async (tx) => {
+    return this.sharingTransaction(async (tx) => {
       const journal = await this.lockJournal(tx, userId, id);
       const visibility = data.visibility ?? journal.visibility;
       if (recipientRelationshipIds !== undefined) {
@@ -159,7 +160,7 @@ export class DiariesService {
       !/^[a-f0-9]{64}$/.test(shareVersion)
     )
       throw new BadRequestException('Invalid shareVersion');
-    return this.prisma.$transaction(async (tx) => {
+    return this.sharingTransaction(async (tx) => {
       const journal = await this.lockJournal(tx, userId, id);
       await this.requireClient(tx, userId);
       await this.checkShareVersion(
@@ -184,6 +185,15 @@ export class DiariesService {
         journal.shareRevision + 1,
         journal.userId,
       );
+    });
+  }
+
+  private sharingTransaction<T>(
+    write: (tx: Prisma.TransactionClient) => Promise<T>,
+  ) {
+    // After waiting for relationship locks, see committed eligibility and grant changes.
+    return this.prisma.$transaction(write, {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
     });
   }
 
@@ -301,16 +311,7 @@ export class DiariesService {
         clientId: userId,
         status: 'ACTIVE',
         deletedAt: null,
-        counselor: {
-          status: 'ACTIVE',
-          deletedAt: null,
-          roleAssignments: {
-            some: {
-              revokedAt: null,
-              role: { code: RoleCode.COUNSELOR, deletedAt: null },
-            },
-          },
-        },
+        counselor: counselorEligibility,
       },
     });
     if (count !== ids.length)
@@ -341,16 +342,7 @@ export class DiariesService {
           clientId: ownerId,
           status: 'ACTIVE',
           deletedAt: null,
-          counselor: {
-            status: 'ACTIVE',
-            deletedAt: null,
-            roleAssignments: {
-              some: {
-                revokedAt: null,
-                role: { code: RoleCode.COUNSELOR, deletedAt: null },
-              },
-            },
-          },
+          counselor: counselorEligibility,
         },
       },
       select: {
