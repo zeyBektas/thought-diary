@@ -23,6 +23,9 @@ describe('RelationshipsService', () => {
   const users = { findById: jest.fn() };
   const user = { findFirst: jest.fn() };
   const queryRaw = jest.fn();
+  const contextFilter = {
+    OR: [{ organizationId: null }, { id: { in: ['profile'] } }],
+  };
   const shares = { deleteMany: jest.fn() };
   const counselorEligibility = {
     status: 'ACTIVE',
@@ -68,6 +71,7 @@ describe('RelationshipsService', () => {
     id: 'rel',
     counselorId: 'counselor',
     clientId: 'client',
+    organizationId: null,
     status,
     deletedAt: null,
   });
@@ -96,6 +100,7 @@ describe('RelationshipsService', () => {
         data: {
           counselorId: 'counselor',
           clientId: 'client',
+          organizationId: null,
           status: Status.PENDING,
         },
       }),
@@ -104,6 +109,7 @@ describe('RelationshipsService', () => {
       where: {
         counselorId: 'counselor',
         clientId: 'client',
+        organizationId: null,
         status: { not: Status.REVOKED },
       },
     });
@@ -143,9 +149,11 @@ describe('RelationshipsService', () => {
           status: Status.ACTIVE,
           deletedAt: null,
           counselor: counselorEligibility,
+          ...contextFilter,
         },
         select: {
           id: true,
+          organizationId: true,
           counselor: {
             select: {
               id: true,
@@ -261,6 +269,7 @@ describe('RelationshipsService', () => {
         where: {
           counselorId: 'counselor',
           clientId: 'client',
+          organizationId: null,
           status: { not: Status.REVOKED },
         },
       });
@@ -282,6 +291,7 @@ describe('RelationshipsService', () => {
             { clientId: 'caller' },
           ],
           deletedAt: null,
+          AND: [contextFilter],
         },
       }),
     );
@@ -319,7 +329,11 @@ describe('RelationshipsService', () => {
     expect(users.findById).not.toHaveBeenCalled();
     expect(db.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { OR: [{ clientId: 'caller' }], deletedAt: null },
+        where: {
+          OR: [{ clientId: 'caller' }],
+          deletedAt: null,
+          AND: [contextFilter],
+        },
       }),
     );
     // The filtered current-assignment query excludes the revoked counselor.
@@ -346,7 +360,7 @@ describe('RelationshipsService', () => {
       expect(users.findById).not.toHaveBeenCalled();
       expect(db.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { OR: [where], deletedAt: null },
+          where: { OR: [where], deletedAt: null, AND: [contextFilter] },
           orderBy: { createdAt: 'desc' },
         }),
       );

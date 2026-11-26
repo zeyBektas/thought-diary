@@ -7,6 +7,7 @@ import { CounselorsModule } from './modules/counselors/counselors.module';
 import { UsersModule } from './modules/users/users.module';
 import { DiariesModule } from './modules/diaries/diaries.module';
 import { RelationshipsModule } from './modules/relationships/relationships.module';
+import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { configuration, validationSchema } from './config';
 
@@ -25,6 +26,7 @@ import { configuration, validationSchema } from './config';
     UsersModule,
     DiariesModule,
     RelationshipsModule,
+    OrganizationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

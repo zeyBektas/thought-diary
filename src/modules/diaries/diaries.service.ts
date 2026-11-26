@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { JournalVisibility, Prisma, RoleCode } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
 import { counselorEligibility } from '../counselors/counselor-eligibility';
+import { eligibleOrganizationRelationshipIds } from '../organizations/organization-context';
 import { CreateDiaryDto } from './dto/create-diary.dto';
 import { UpdateDiaryDto } from './dto/update-diary.dto';
 
@@ -305,6 +306,10 @@ export class DiariesService {
       await tx.$queryRaw`SELECT id FROM care_relationships WHERE id = ${id} FOR UPDATE`;
     }
     await this.requireClient(tx, userId);
+    const eligible = await eligibleOrganizationRelationshipIds(tx, {
+      relationshipIds: ids,
+      clientId: userId,
+    });
     const count = await tx.careRelationship.count({
       where: {
         id: { in: ids },
@@ -312,6 +317,7 @@ export class DiariesService {
         status: 'ACTIVE',
         deletedAt: null,
         counselor: counselorEligibility,
+        OR: [{ organizationId: null }, { id: { in: eligible } }],
       },
     });
     if (count !== ids.length)
@@ -334,6 +340,10 @@ export class DiariesService {
     journalId: string,
     ownerId: string,
   ) {
+    const eligible = await eligibleOrganizationRelationshipIds(tx, {
+      journalId,
+      clientId: ownerId,
+    });
     const shares = await tx.journalShare.findMany({
       where: {
         journalId,
@@ -343,6 +353,7 @@ export class DiariesService {
           status: 'ACTIVE',
           deletedAt: null,
           counselor: counselorEligibility,
+          OR: [{ organizationId: null }, { id: { in: eligible } }],
         },
       },
       select: {

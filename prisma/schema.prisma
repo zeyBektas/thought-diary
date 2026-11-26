@@ -120,7 +120,8 @@ model CareRelationship {
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   journalShares JournalShare[]
 
-  // Non-revoked pair uniqueness is enforced by a partial index in migration SQL.
+  // Migration-owned partial indexes enforce one non-revoked pair per context,
+  // with separate indexes for independent (NULL) and organization relationships.
   @@index([counselorId])
   @@index([clientId])
   @@index([status])

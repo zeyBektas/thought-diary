@@ -109,8 +109,12 @@ describe('isolated organization foundation migration', () => {
       SELECT c.relname AS name, pg_get_indexdef(i.indexrelid) AS definition,
         pg_get_expr(i.indpred, i.indrelid) AS predicate, i.indisvalid AS valid, i.indisunique AS "unique"
       FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('user_roles_active_user_role_key', 'organization_memberships_current_pair_key', 'organization_invitations_pending_key', 'care_relationships_non_revoked_pair_key')`;
-    expect(indexes).toHaveLength(4);
+      WHERE n.nspname = 'public' AND c.relname IN (
+        'user_roles_active_user_role_key', 'organization_memberships_current_pair_key',
+        'organization_invitations_pending_key', 'care_relationships_non_revoked_independent_pair_key',
+        'care_relationships_non_revoked_organization_pair_key'
+      )`;
+    expect(indexes).toHaveLength(5);
     for (const index of indexes)
       expect(index).toMatchObject({ valid: true, unique: true });
     const byName = Object.fromEntries(
@@ -134,9 +138,12 @@ describe('isolated organization foundation migration', () => {
     expect(byName.organization_invitations_pending_key.predicate).toMatch(
       /PENDING/,
     );
-    expect(byName.care_relationships_non_revoked_pair_key.predicate).toMatch(
-      /<> 'REVOKED'/,
-    );
+    expect(
+      byName.care_relationships_non_revoked_independent_pair_key.predicate,
+    ).toMatch(/"organizationId" IS NULL.*<> 'REVOKED'/);
+    expect(
+      byName.care_relationships_non_revoked_organization_pair_key.predicate,
+    ).toMatch(/"organizationId" IS NOT NULL.*<> 'REVOKED'/);
   });
 
   it('allows revoked role history but rejects duplicate active assignments', async () => {

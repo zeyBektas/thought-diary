@@ -33,6 +33,7 @@ describe('diary sharing', () => {
   const service = new DiariesService(prisma as unknown as PrismaService);
   beforeEach(() => {
     jest.resetAllMocks();
+    tx.$queryRaw.mockResolvedValue([]);
     tx.user.findFirst.mockResolvedValue({ id: 'owner' });
     tx.journal.findFirst.mockResolvedValue({
       id: 'entry',
@@ -84,6 +85,7 @@ describe('diary sharing', () => {
         clientId: 'owner',
         status: 'ACTIVE',
         deletedAt: null,
+        OR: [{ organizationId: null }, { id: { in: [] } }],
         counselor: {
           status: 'ACTIVE',
           deletedAt: null,
@@ -140,6 +142,7 @@ describe('diary sharing', () => {
             clientId: 'owner',
             status: 'ACTIVE',
             deletedAt: null,
+            OR: [{ organizationId: null }, { id: { in: [] } }],
             counselor: {
               status: 'ACTIVE',
               deletedAt: null,

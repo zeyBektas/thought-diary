@@ -7,6 +7,7 @@ import {
 import { JournalEntryType, Prisma } from '@prisma/client';
 import { PrismaService } from '@/core/prisma/prisma.service';
 import { counselorEligibilitySql } from '../counselors/counselor-eligibility';
+import { operationalOrganizationRelationshipSql } from '../organizations/organization-context';
 import { ListCounselorDiariesDto } from './dto/list-counselor-diaries.dto';
 
 type DiaryRow = {
@@ -41,6 +42,7 @@ export class CounselorDiariesService {
         JOIN care_relationships r ON r.id = s."relationshipId"
         WHERE s."journalId" = j.id AND r."clientId" = j."userId"
           AND r."counselorId" = ${userId} AND r.status = 'ACTIVE' AND r."deletedAt" IS NULL
+          AND ${operationalOrganizationRelationshipSql}
       )`;
   }
 

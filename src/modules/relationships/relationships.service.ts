@@ -14,6 +14,10 @@ import {
   requireEligibleCounselor,
 } from '../counselors/counselor-eligibility';
 import {
+  eligibleOrganizationRelationshipIds,
+  lockRelationshipOrganization,
+} from '../organizations/organization-context';
+import {
   type CurrentUser,
   hasCurrentRole,
   UsersService,
@@ -74,7 +78,7 @@ export class RelationshipsService {
 
     const client = await this.usersService.findById(dto.clientId);
 
-    if (!client || client.deletedAt) {
+    if (!client || client.deletedAt || client.status !== 'ACTIVE') {
       throw new NotFoundException('Client not found');
     }
 
@@ -82,29 +86,44 @@ export class RelationshipsService {
       throw new BadRequestException('Target user must be a client');
     }
 
-    const existingRelationship = await this.prisma.careRelationship.findFirst({
-      where: {
-        counselorId,
-        clientId: dto.clientId,
-        status: { not: CareRelationshipStatus.REVOKED },
-      },
-    });
-
-    if (existingRelationship) {
+    const organizationId = dto.organizationId ?? null;
+    const pair = {
+      counselorId,
+      clientId: dto.clientId,
+      organizationId,
+      status: { not: CareRelationshipStatus.REVOKED },
+    };
+    if (
+      organizationId === null &&
+      (await this.prisma.careRelationship.findFirst({ where: pair }))
+    )
       throw new ConflictException('Relationship already exists');
-    }
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        await lockRelationshipOrganization(
+          tx,
+          organizationId,
+          dto.clientId,
+          counselorId,
+        );
         await lockEligibleCounselor(tx, counselorId);
-        return tx.careRelationship.create({
+        if (
+          organizationId !== null &&
+          (await tx.careRelationship.findFirst({ where: pair }))
+        )
+          throw new ConflictException('Relationship already exists');
+        const relationship = await tx.careRelationship.create({
           data: {
             counselorId,
             clientId: dto.clientId,
+            organizationId,
             status: CareRelationshipStatus.PENDING,
           },
           include: this.relationshipInclude,
         });
+        await this.auditScopedTransition(tx, counselorId, relationship);
+        return relationship;
       });
     } catch (error) {
       if (
@@ -138,16 +157,23 @@ export class RelationshipsService {
       });
     if (client) participation.push({ clientId: userId });
 
-    return this.prisma.careRelationship.findMany({
-      where: {
-        OR: participation,
-        deletedAt: null,
+    return this.prisma.$transaction(
+      async (tx) => {
+        const eligible = await eligibleOrganizationRelationshipIds(tx, {
+          participantId: userId,
+        });
+        return tx.careRelationship.findMany({
+          where: {
+            OR: participation,
+            deletedAt: null,
+            AND: [{ OR: [{ organizationId: null }, { id: { in: eligible } }] }],
+          },
+          include: this.relationshipInclude,
+          orderBy: { createdAt: 'desc' },
+        });
       },
-      include: this.relationshipInclude,
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async respond(userId: string, id: string, dto: RespondRelationshipDto) {
@@ -177,6 +203,12 @@ export class RelationshipsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await lockRelationshipOrganization(
+        tx,
+        relationship.organizationId,
+        relationship.clientId,
+        relationship.counselorId,
+      );
       if (dto.status === CareRelationshipStatus.ACTIVE)
         await lockEligibleCounselor(tx, relationship.counselorId);
       const result = await tx.careRelationship.updateMany({
@@ -201,6 +233,12 @@ export class RelationshipsService {
         include: this.relationshipInclude,
       });
       if (!updated) throw new NotFoundException('Relationship not found');
+      await this.auditScopedTransition(
+        tx,
+        userId,
+        updated,
+        relationship.status,
+      );
       return updated;
     });
   }
@@ -209,23 +247,39 @@ export class RelationshipsService {
     if (!hasCurrentRole(user, RoleCode.CLIENT)) {
       throw new ForbiddenException('Only clients can select counselors');
     }
-    const relationships = await this.prisma.careRelationship.findMany({
-      where: {
-        clientId: user.userId,
-        status: CareRelationshipStatus.ACTIVE,
-        deletedAt: null,
-        counselor: counselorEligibility,
+    const relationships = await this.prisma.$transaction(
+      async (tx) => {
+        const eligible = await eligibleOrganizationRelationshipIds(tx, {
+          clientId: user.userId,
+        });
+        return tx.careRelationship.findMany({
+          where: {
+            clientId: user.userId,
+            status: CareRelationshipStatus.ACTIVE,
+            deletedAt: null,
+            counselor: counselorEligibility,
+            OR: [{ organizationId: null }, { id: { in: eligible } }],
+          },
+          select: {
+            id: true,
+            organizationId: true,
+            counselor: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                username: true,
+              },
+            },
+          },
+        });
       },
-      select: {
-        id: true,
-        counselor: {
-          select: { id: true, firstName: true, lastName: true, username: true },
-        },
-      },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
     return {
-      counselors: relationships.map(({ id, counselor }) => ({
+      counselors: relationships.map(({ id, organizationId, counselor }) => ({
         relationshipId: id,
+        ...(organizationId && { organizationId }),
         counselor,
       })),
     };
@@ -258,6 +312,12 @@ export class RelationshipsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await lockRelationshipOrganization(
+        tx,
+        relationship.organizationId,
+        relationship.clientId,
+        relationship.counselorId,
+      );
       if (!asClient) await lockEligibleCounselor(tx, userId);
       const result = await tx.careRelationship.updateMany({
         where: {
@@ -284,9 +344,39 @@ export class RelationshipsService {
         include: this.relationshipInclude,
       });
       if (!updated) throw new NotFoundException('Relationship not found');
+      await this.auditScopedTransition(
+        tx,
+        userId,
+        updated,
+        relationship.status,
+      );
       return updated;
     });
     return updated;
+  }
+
+  private async auditScopedTransition(
+    tx: Prisma.TransactionClient,
+    actorUserId: string,
+    relationship: {
+      id: string;
+      organizationId: string | null;
+      status: CareRelationshipStatus;
+    },
+    previous?: CareRelationshipStatus,
+  ) {
+    if (relationship.organizationId === null) return;
+    await tx.auditLog.create({
+      data: {
+        actorUserId,
+        organizationId: relationship.organizationId,
+        action: 'ORGANIZATION_RELATIONSHIP_' + relationship.status,
+        targetId: relationship.id,
+        targetType: 'CARE_RELATIONSHIP',
+        result: 'SUCCESS',
+        metadata: { from: previous ?? null, to: relationship.status },
+      },
+    });
   }
 
   private async requireActiveParticipant(userId: string) {
