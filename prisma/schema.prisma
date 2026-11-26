@@ -82,6 +82,7 @@ model User {
   counselorNotesWritten  CounselorNote[]    @relation("WrittenNotes")
   journals               Journal[]
   refreshTokens          RefreshToken[]
+  emailVerification      EmailVerificationChallenge?
   organization           Organization?      @relation(fields: [organizationId], references: [id])
   role                   Role               @relation(fields: [roleId], references: [id])
   roleAssignments UserRole[] @relation("RoleAssignee")
@@ -236,6 +237,17 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([targetType, targetId])
   @@map("audit_logs")
+}
+
+model EmailVerificationChallenge {
+  userId String @id
+  email String
+  tokenHash String
+  issuedAt DateTime
+  expiresAt DateTime
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_verification_challenges")
 }
 
 model RefreshToken {

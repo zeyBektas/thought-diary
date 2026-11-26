@@ -5,15 +5,19 @@ import type { SignOptions } from 'jsonwebtoken';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { PrismaModule } from '@/core/prisma/prisma.module';
+import { MailDeliveryModule } from '@/core/mail/mail-delivery.module';
 import { UsersModule } from '../users/users.module';
 import { DiariesModule } from '../diaries/diaries.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { EmailVerificationController } from './email-verification.controller';
+import { EmailVerificationService } from './email-verification.service';
 
 @Module({
-  controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  controllers: [AuthController, EmailVerificationController],
+  providers: [AuthService, JwtStrategy, EmailVerificationService],
   imports: [
     PrismaModule,
+    MailDeliveryModule,
     UsersModule,
     DiariesModule,
     JwtModule.registerAsync({

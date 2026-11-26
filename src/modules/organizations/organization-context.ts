@@ -3,6 +3,7 @@ import {
   type OrganizationPermission,
   type OrganizationStatus,
   Prisma,
+  RoleCode,
 } from '@prisma/client';
 
 export const activeOrganizationMembership = {
@@ -61,6 +62,28 @@ export async function requireActiveOrganizationMember(
   if (!membership)
     throw new ForbiddenException('Active organization membership required');
   return membership;
+}
+
+export async function isCurrentPlatformAdmin(
+  tx: Prisma.TransactionClient,
+  userId: string,
+) {
+  return Boolean(
+    await tx.user.findFirst({
+      where: {
+        id: userId,
+        status: 'ACTIVE',
+        deletedAt: null,
+        roleAssignments: {
+          some: {
+            revokedAt: null,
+            role: { code: RoleCode.PLATFORM_ADMIN, deletedAt: null },
+          },
+        },
+      },
+      select: { id: true },
+    }),
+  );
 }
 
 // Relationship writers acquire the organization lock before profile or

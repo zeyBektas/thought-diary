@@ -10,10 +10,10 @@ import {
   OrganizationPermission,
   OrganizationStatus,
   Prisma,
-  RoleCode,
 } from '@prisma/client';
 import type { CreateOrganizationDto } from './dto/organization.dto';
 import {
+  isCurrentPlatformAdmin,
   lockOrganization,
   requireActiveOrganization,
   requireActiveOrganizationMember,
@@ -443,7 +443,7 @@ export class OrganizationsService {
     organizationId: string,
     actorId: string,
   ) {
-    const platformAdmin = await this.isPlatformAdmin(tx, actorId);
+    const platformAdmin = await isCurrentPlatformAdmin(tx, actorId);
     if (!platformAdmin)
       await requireActiveOrganizationMember(
         tx,
@@ -454,29 +454,11 @@ export class OrganizationsService {
     return platformAdmin;
   }
 
-  private async isPlatformAdmin(tx: Prisma.TransactionClient, userId: string) {
-    const admin = await tx.user.findFirst({
-      where: {
-        id: userId,
-        status: 'ACTIVE',
-        deletedAt: null,
-        roleAssignments: {
-          some: {
-            revokedAt: null,
-            role: { code: RoleCode.PLATFORM_ADMIN, deletedAt: null },
-          },
-        },
-      },
-      select: { id: true },
-    });
-    return Boolean(admin);
-  }
-
   private async requirePlatformAdmin(
     tx: Prisma.TransactionClient,
     userId: string,
   ) {
-    if (!(await this.isPlatformAdmin(tx, userId)))
+    if (!(await isCurrentPlatformAdmin(tx, userId)))
       throw new ForbiddenException('Platform Admin role required');
   }
 

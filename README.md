@@ -125,3 +125,15 @@ unset COUNSELOR_PASSWORD
 An authorized operator should run this as a separate, one-off operation with production database access and credentials injected from the deployment secret manager. Run it only after the normal migrations and role seed; do not add it to application startup, routine deployment automation, or the standard seed command.
 
 The command requires the existing `COUNSELOR` role, creates a counselor using the same password hashing convention as registration, and does not change an existing account. An existing counselor is reported as already provisioned; an email belonging to another role fails safely.
+
+## Organization invitations
+
+Current Platform Admins and effective Organization Admins in the named organization can manage invitations under `/organizations/:organizationId/invitations`: `POST` to create, `GET` to list, `GET /:invitationId` to inspect, and `POST /:invitationId/resend` or `/revoke`. A Platform Admin can still inspect or revoke while the organization is suspended. Pending invitations expire after seven days; resend rotates the secret without changing the deadline.
+
+Accept using an authenticated `POST /organizations/invitations/accept` with a JSON `token`. The account must first prove ownership of its current email: authenticate, `POST /auth/email-verification/request` (the destination is read from the account), then `POST /auth/email-verification/confirm` with the separate challenge token. Challenges expire after 30 minutes; successful requests are limited to one per account per minute. Neither type of token belongs in an API URL or request logs. Registration, login and refresh otherwise behave as before. If an email-change flow is added later, it must clear `emailVerifiedAt` and invalidate the challenge in the same account update.
+
+Acceptance creates only an ordinary membership. An existing ACTIVE or SUSPENDED episode yields `409` without consuming the invitation or changing roles or permission. LEFT or REMOVED history is retained when a new episode is created. Counselor invitations only admit existing, verified and currently approved counselors.
+
+No production mail provider is configured. To enable sending, bind `MailDelivery` to a transactional email provider and configure its credentials, verified sender/domain, and templates or trusted client destination for the two message types. Honor the cancellation deadline, add deployment-level abuse limits, suppress token-bearing message content in request/provider logs, and disable mail click tracking. The default adapter fails closed with HTTP `503`; the integration fake is only available in tests. No runtime capture or token-return endpoint is provided.
+
+The database transaction commits only after the provider acknowledges submission. If submission fails or times out, creation rolls back and resend keeps the old token. Email and PostgreSQL cannot commit atomically: if delivery is acknowledged but PostgreSQL subsequently rolls back, the delivered new token is unusable. Provider acknowledgement is not proof of inbox delivery.
